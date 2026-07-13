@@ -1,0 +1,52 @@
+# Example site local.zeek for the c2-detection-ssl package.
+#
+# Copy the @load lines into your Zeek site local.zeek
+# (usually /usr/local/zeek/share/zeek/site/local.zeek).
+#
+# The package is PRODUCTION-READY BY DEFAULT — production thresholds are
+# already active with no tuning required. All site-specific tuning
+# (allowlisted domains, proxy config, interception CA, VLAN exclusions)
+# lives in scripts/local-exclusions.zeek inside the package, which is
+# preserved across package upgrades. You normally do NOT put tuning here.
+
+# ---- Activate the package ----
+@load c2-detection-ssl
+
+# Strongly recommended: early-warning tunnel detection on long-lived flows
+# (otherwise a tunnel is only evaluated when the flow finally closes).
+@load corelight/zeek-long-connections
+
+# Optional: adds JA4 fingerprints to ssl.log (used for pivot detection).
+@load foxio/ja4
+
+# ----------------------------------------------------------------
+# Deployment profile.
+#
+#   Production thresholds are the DEFAULT. Nothing to do for live use.
+#
+#   For replaying SHORT offline PCAPs (malware sandbox captures, a few
+#   minutes of traffic) the production time/sample gates will suppress
+#   real detections because the capture is too short. Load the sandbox
+#   profile in that case ONLY:
+#
+#     @load c2-detection-ssl/sandbox
+#
+#   You may also @load c2-detection-ssl/production explicitly for clarity;
+#   it is a no-op since production is already the default.
+# ----------------------------------------------------------------
+
+# ----------------------------------------------------------------
+# Enable Zeek Notices (optional).
+#
+#   The package always writes c2_detections_ssl.log. Notices are OFF by
+#   default so you can tune against the log first. Turn on once satisfied:
+# ----------------------------------------------------------------
+# redef C2_SSL::generate_notices = T;
+
+# ----------------------------------------------------------------
+# All other tuning -> scripts/local-exclusions.zeek
+#
+#   Proxies, interception CA, allowlisted domains, trusted subnets, and
+#   device-VLAN exclusions all go there so they survive package upgrades.
+#   See that file's header for the full explanation.
+# ----------------------------------------------------------------

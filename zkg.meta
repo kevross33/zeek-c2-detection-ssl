@@ -1,0 +1,10 @@
+[package]
+description = C2 detection over SSL/TLS — behavioural beaconing, tunnels, reverse-flow RAT, trusted-pivot abuse. Zeek 7+/8+. No per-malware signatures. Explicit/intercepting-proxy aware.
+script_dir = .
+tags = c2, beacon, tls, ssl, anomaly, threat-hunting, proxy
+test_command = cd testing && btest -d tests
+depends =
+    zeek >=7.0.0
+suggests =
+    zeek/corelight/zeek-long-connections
+    zeek/foxio/ja4
