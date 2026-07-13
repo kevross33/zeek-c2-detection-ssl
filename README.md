@@ -1,5 +1,7 @@
 # C2 Detection — SSL/TLS module
 
+NOTE: While I provided much of the detection logic and extensively tested everything including looking at code, it was written with the assistance of LLMs due to its scale and complexity and to allow the detections to be created at pace. I have tested this both against malicious traffic PCAPs as well as run against large scale enterprise traffic. local-exclusions file will allow you to tune out any local false positives but often they are genuine tunnels of some description even if legitimate and I have not seen a beaconing false positive yet (although it should be assumed there will be.  
+
 Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8.
 Designed for noisy enterprise networks (30k+ users, 40k+ devices, mixed PC /
 medical / IoT estate including hospital and clinical environments).
@@ -7,6 +9,17 @@ medical / IoT estate including hospital and clinical environments).
 False positives are the dominant operational cost. The framework is designed
 to be conservative by default: delayed, high-confidence alerts are preferable
 to noisy low-confidence ones.
+
+Some examples of detections (it will not detect everything, layer against failure of a single detection technique or solution i.e utilise RITA for additional beaconing detection from Zeek data).
+
+# https://www.malware-traffic-analysis.net/2023/10/16/index.html
+<img width="1853" height="662" alt="image" src="https://github.com/user-attachments/assets/905c38be-0ac4-4cea-9b8b-364ff69e6a1c" />
+
+# https://www.malware-traffic-analysis.net/2021/12/13/index.html
+<img width="2357" height="1217" alt="image" src="https://github.com/user-attachments/assets/2aea7ed9-fa4c-43b8-b255-8ca1b60c8308" />
+
+# https://www.malware-traffic-analysis.net/2023/10/17/index.html
+<img width="2489" height="119" alt="image" src="https://github.com/user-attachments/assets/5be08682-5f74-4869-bac8-31ec750e4574" />
 
 ## What it detects
 
