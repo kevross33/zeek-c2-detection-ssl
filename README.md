@@ -18,9 +18,6 @@ Some examples of detections (it will not detect everything, layer against failur
 # https://www.malware-traffic-analysis.net/2021/12/13/index.html
 <img width="2357" height="1217" alt="image" src="https://github.com/user-attachments/assets/2aea7ed9-fa4c-43b8-b255-8ca1b60c8308" />
 
-# https://www.malware-traffic-analysis.net/2023/10/17/index.html
-<img width="2489" height="119" alt="image" src="https://github.com/user-attachments/assets/5be08682-5f74-4869-bac8-31ec750e4574" />
-
 ## What it detects
 
 **Scope: outbound C2 only.** This package analyses OUTBOUND flows —
