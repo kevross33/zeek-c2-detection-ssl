@@ -14,9 +14,9 @@ Another note is it does support definition of web proxies. The correct positioni
 
 The following zeek packages are required/recommended (JA4 for fingerprinting and spl-spt for packet timing are essential):
 
-zeek/corelight/zeek-long-connections
-zeek/salesforce/ja3
-zeek/foxio/ja4
+zeek/corelight/zeek-long-connections,
+zeek/salesforce/ja3,
+zeek/foxio/ja4,
 zeek/micrictor/spl-spt
 
 The intention is that this will eventually become a zkg installable package. You are free to use this package for testing purposes.
