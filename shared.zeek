@@ -300,8 +300,17 @@ export {
     # set short-circuits all tracking for that destination. Refreshed
     # by note_dest_client on every connection — so an actively-used
     # destination stays popular indefinitely.
+    # NOTE: &write_expire (NOT &create_expire). &create_expire times from
+    # INSERTION and is never refreshed by reads or writes, so an actively-used
+    # popular destination would silently expire and fall back into the tracked
+    # candidate pool — with its dest_client_count already deleted, it would
+    # have to re-earn popularity from zero. That produces a periodic,
+    # network-wide false-positive window every popular_dest_expiry.
+    # &write_expire is refreshed on write, so the `add` in note_dest_client
+    # genuinely extends the lifetime and a busy destination stays popular for
+    # as long as it keeps being hit.
     global popular_dests: set[string]
-        &create_expire = popular_dest_expiry;
+        &write_expire = popular_dest_expiry;
 
     # ------------------------------------------------------------------
     # Public helpers.
@@ -857,9 +866,11 @@ function note_dest_client(dest_id: string, client: addr)
     if ( dest_id == "" )
         return;
 
-    # Refresh the popular marker if already known. The &create_expire on
-    # the popular_dests set means re-adding extends the lifetime — an
-    # actively-used destination stays popular for as long as it's hit.
+    # Refresh the popular marker if already known. popular_dests is declared
+    # with &write_expire, so this re-add is a WRITE and genuinely extends the
+    # lifetime — an actively-used destination stays popular for as long as
+    # it's hit. (This only works because of &write_expire: &create_expire
+    # would time from insertion and ignore this refresh entirely.)
     if ( dest_id in popular_dests )
         {
         add popular_dests[dest_id];
