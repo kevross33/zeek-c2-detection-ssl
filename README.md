@@ -21,8 +21,7 @@ The intention is that this will eventually become a zkg installable package. You
 ####################
 
 Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8.
-Designed for noisy enterprise networks (30k+ users, 40k+ devices, mixed PC /
-medical / IoT estate including hospital and clinical environments).
+Designed for noisy enterprise networks (tens of thousands users & devices, mixed PC/IoT etc).
 
 False positives are the dominant operational cost. The framework is designed
 to be conservative by default: delayed, high-confidence alerts are preferable
@@ -324,9 +323,7 @@ clients** in the network have connected to any given destination
 
 This catches the long tail of legitimate niche services (regional news,
 vendor portals, CRM/HR/finance SaaS, video conferencing, niche cloud apps)
-without requiring any pre-curated allowlist. Real C2 in a hospital network
-is overwhelmingly likely to involve very few infected clients (often one);
-legitimate destinations have many clients.
+without requiring any pre-curated allowlist.
 
 The threshold is configurable: `redef C2_SSL::popular_dest_threshold = 5`.
 
@@ -507,22 +504,6 @@ cert-pinning malware bypassing inspection or the proxy passing the real cert
 through. The `proxy_intercepted` alert field records the verdict per flow.
 
 See `local.zeek.example` section 1a for the interception-CA tuning block.
-
-## Tuning for hospital networks
-
-Medical devices, franking machines, printers, and building management systems
-legitimately beacon to vendor cloud. Suppress their VLANs entirely:
-
-```zeek
-redef C2_SSL::trusted_orig_subnets += {
-    10.40.0.0/16,    # PACS / medical imaging
-    10.41.0.0/16,    # Lab analysers
-    10.42.0.0/16,    # Pharmacy dispensing
-    10.99.5.0/24,    # Franking machines
-    10.99.6.0/24,    # Building management
-    10.99.7.0/24,    # Networked printers
-};
-```
 
 ## Files in this package
 
