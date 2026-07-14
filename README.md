@@ -1,7 +1,8 @@
 # C2 Detection — SSL/TLS module
 
 ####################
-WHILE THIS IS IN DEVELOPMENT. I APPRECIATE ALL FEEDBACK THAT COULD ENHANCE THIS PACKAGE (Especially decreasing any false negatives/positives or increasing performance further).CURRENT WORK IN FINAL IMPROEMENTS AND FIXES IS ONGOING.
+WHILE THIS IS IN DEVELOPMENT. I APPRECIATE ALL FEEDBACK THAT COULD ENHANCE THIS PACKAGE (Especially decreasing any false negatives/positives or increasing performance further). 
+CURRENT WORK ON FINAL IMPROVEMENTS AND FIXES IS ONGOING.
 
 NOTE: While I provided much of the detection logic and extensively tested everything including looking at code, it was written with the assistance of LLMs due to its scale and complexity and to allow the detections to be created at pace. I have tested this both against malicious traffic PCAPs as well as run against large scale enterprise traffic. local-exclusions file will allow you to tune out any local false positives but often they are genuine tunnels of some description even if legitimate and I have not seen a beaconing false positive yet (although it should be assumed there will be). It does attempt to determine rarity to elimate likely legitimate traffic as early as possible (mostly if it sees other hosts using same fingerprints, destinatione etc.). Some of these indicators are not an immediate disqualification of a C2 channel, for example even if the JA4 fingerprint is not rare in the environment will simply not use that as as a negative indicator due to potential false negatives from malware utilising legitimate binaries or fingperprints including faking them.  
 
