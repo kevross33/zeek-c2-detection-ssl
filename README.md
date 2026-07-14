@@ -1,6 +1,6 @@
 # C2 Detection — SSL/TLS module
 
-NOTE: While I provided much of the detection logic and extensively tested everything including looking at code, it was written with the assistance of LLMs due to its scale and complexity and to allow the detections to be created at pace. I have tested this both against malicious traffic PCAPs as well as run against large scale enterprise traffic. local-exclusions file will allow you to tune out any local false positives but often they are genuine tunnels of some description even if legitimate and I have not seen a beaconing false positive yet (although it should be assumed there will be.  
+NOTE: While I provided much of the detection logic and extensively tested everything including looking at code, it was written with the assistance of LLMs due to its scale and complexity and to allow the detections to be created at pace. I have tested this both against malicious traffic PCAPs as well as run against large scale enterprise traffic. local-exclusions file will allow you to tune out any local false positives but often they are genuine tunnels of some description even if legitimate and I have not seen a beaconing false positive yet (although it should be assumed there will be. This ultimately is a work in progress and false negatives will look to be eliminated over time where approrpriate but it is limited to detecting long connections (beaconing/tunnels).
 
 Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8.
 Designed for noisy enterprise networks (30k+ users, 40k+ devices, mixed PC /
@@ -17,6 +17,10 @@ Some examples of detections (it will not detect everything, layer against failur
 
 # https://www.malware-traffic-analysis.net/2021/12/13/index.html
 <img width="2357" height="1217" alt="image" src="https://github.com/user-attachments/assets/2aea7ed9-fa4c-43b8-b255-8ca1b60c8308" />
+
+https://www.malware-traffic-analysis.net/2020/02/26/index.html
+<img width="2487" height="315" alt="image" src="https://github.com/user-attachments/assets/e665e470-a5e3-4c73-a889-a8d5af40a364" />
+
 
 ## What it detects
 
