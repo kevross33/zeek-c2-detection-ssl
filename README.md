@@ -19,7 +19,7 @@ zeek/salesforce/ja3,
 zeek/foxio/ja4,
 zeek/micrictor/spl-spt
 
-The intention is that this will eventually become a zkg installable package. You are free to use this package for testing purposes.
+The intention is that this will eventually become a zkg installable package. You are free to use this package for testing purposes. Other protocols will then be looked at (namely HTTP, unknown TCP for custom binary protocols and RATs communicating) and SSH tunnels. Other protocols/detections may not be needed, for instance wireguard is already detected via zeek/corelight/zeek-spicy-wireguard (SLIVER and other tooling may use this protocol), ICMP and DNS already have detection packages in place but this may still be looked at if there is any gaps.
 
 ####################
 
