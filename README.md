@@ -7,6 +7,8 @@ NOTE: While I provided much of the detection logic and extensively tested everyt
 
 This ultimately is a work in progress and false negatives will look to be eliminated over time where approrpriate but it is limited to detecting long connections (beaconing/tunnels). One other benefit of this package is it will take intel hits into consideration but only as a minor indicator but this could provide intel confirmation i.e threatfox C2 indicator hit where beaconing is seen. It does not require intel however to detect C2 and can even detect some cases or legitimate service C2.
 
+It will also attempt to detect other activities over the C2 channel including potential tasking messages but primarily if there is a payload download (assumed by a "payload sized" download burst) as well as if a C2 channel starts exfiltrating data with staged escalation as transfered amounts of data increase.
+
 Another note is it does support definition of web proxies. The correct positioning of a sensor for this between the client and the web proxy so we can see the true client as well as potential fingerprinting. This however is only partially tested at the moment and only client to Internet has been fully tested in network. It exists to provide that detection on what can still be detected on but also to deal with potential false positive skews proxies may introduce if not defined correctly.
 
 The following zeek packages are required/recommended (JA4 for fingerprinting and spl-spt for packet timing are essential):
