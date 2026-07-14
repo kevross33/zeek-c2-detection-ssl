@@ -12,12 +12,12 @@ It will also attempt to detect other activities over the C2 channel including po
 
 Another note is it does support definition of web proxies. The correct positioning of a sensor for this between the client and the web proxy so we can see the true client as well as potential fingerprinting. This however is only partially tested at the moment and only client to Internet has been fully tested in network. It exists to provide that detection on what can still be detected on but also to deal with potential false positive skews proxies may introduce if not defined correctly.
 
-The following zeek packages are required/recommended (JA4 for fingerprinting and spl-spt for packet timing are essential):
+**The following zeek packages are required/recommended (JA4 for fingerprinting and spl-spt for packet timing are essential):
 
 zeek/corelight/zeek-long-connections,
 zeek/salesforce/ja3,
 zeek/foxio/ja4,
-zeek/micrictor/spl-spt
+zeek/micrictor/spl-spt**
 
 The intention is that this will eventually become a zkg installable package. You are free to use this package for testing purposes. Other protocols will then be looked at (namely HTTP, unknown TCP for custom binary protocols and RATs communicating) and SSH tunnels. Other protocols/detections may not be needed, for instance wireguard is already detected via zeek/corelight/zeek-spicy-wireguard (SLIVER and other tooling may use this protocol), ICMP and DNS already have detection packages in place but this may still be looked at if there is any gaps.
 
