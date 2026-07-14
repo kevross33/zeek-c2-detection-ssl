@@ -40,6 +40,12 @@ https://www.malware-traffic-analysis.net/2021/12/13/index.html
 https://www.malware-traffic-analysis.net/2020/02/26/index.html
 <img width="2487" height="315" alt="image" src="https://github.com/user-attachments/assets/e665e470-a5e3-4c73-a889-a8d5af40a364" />
 
+https://www.activecountermeasures.com/malware-of-the-day-icedid-loader-to-alphv-ransomware-campaign/
+<img width="2488" height="189" alt="image" src="https://github.com/user-attachments/assets/f2390464-6899-4088-b0dd-a2ae3fdce7d2" />
+
+https://www.activecountermeasures.com/malware-of-the-day-tunneled-c2-beaconing/
+<img width="2478" height="273" alt="image" src="https://github.com/user-attachments/assets/27dda7b4-190c-4a9f-946d-f97b409734eb" />
+
 
 ## What it detects
 
