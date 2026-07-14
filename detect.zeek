@@ -2463,6 +2463,17 @@ event connection_state_remove(c: connection) &priority = -5
     # Update per-flow beacon state.
     local k  = update_flow_state(c);
 
+    # update_flow_state early-returns WITHOUT creating state when this update
+    # tipped the destination over popular_dest_threshold: note_dest_client()
+    # calls evict_state_for_dest(), which deletes every flow_state entry for
+    # that destination, and update_flow_state then returns k with nothing
+    # tracked. Indexing flow_state[k] here unguarded raises a Zeek reporter
+    # error once per destination per popularity flip. The destination is now
+    # popular (a shared service, not single-host C2), so there is nothing left
+    # to evaluate — bail out.
+    if ( k !in flow_state )
+        return;
+
     local st = flow_state[k];
 
     # Periodic beacon evaluation.
