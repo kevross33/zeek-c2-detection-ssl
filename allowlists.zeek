@@ -4,9 +4,6 @@
 # Defaults cover Microsoft 365, Teams, Exchange, SharePoint, and identity
 # infrastructure exhaustively based on the canonical Microsoft endpoint list
 # (https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges).
-#
-# Hospital / medical environments will need site-specific additions for
-# medical device subnets, franking machines, networking gear, printers, etc.
 
 module C2_SSL;
 
@@ -66,7 +63,7 @@ export {
     # "proxy-intercepted" (trusted interception, not attacker self-signing).
     #
     # proxy_ca_issuers: substring(s) of the certificate issuer DN of your
-    #   interception CA. E.g. "CN=Acme Hospital SSL Inspection CA".
+    #   interception CA. E.g. "CN=Acme SSL Inspection CA".
     #   Substring match, so a distinctive fragment (the CN) is enough.
     #
     # proxy_ca_fingerprints: exact SHA-256 cert fingerprint(s) of your
@@ -330,7 +327,7 @@ export {
         # ---------------------------------------------------------------
         # Major enterprise vendor infrastructure — first-party telemetry,
         # update, management, and collaboration services. These are
-        # broadly present in enterprise (and hospital) networks and carry
+        # broadly present in enterprise networks and carry
         # low C2-abuse risk on their own apex/vendor domains.
         # ---------------------------------------------------------------
         # Cisco (Webex, DNA Center, corporate services, Secure Access/SIG).
