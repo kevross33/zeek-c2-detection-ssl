@@ -53,7 +53,7 @@ https://www.activecountermeasures.com/malware-of-the-day-tunneled-c2-beaconing/
 
 ## What it detects
 
-**Scope: outbound C2 only.** This package analyses OUTBOUND flows —
+This package analyses OUTBOUND flows —
 internal clients calling out to external servers (the direction a
 compromised host beacons in). Inbound connections (external → internal,
 such as RDP brute-force or inbound scanning) and, by default, east-west
