@@ -30,7 +30,8 @@ False positives are the dominant operational cost. The framework is designed
 to be conservative by default: delayed, high-confidence alerts are preferable
 to noisy low-confidence ones.
 
-Some examples of detections (it will not detect everything, layer against failure of a single detection technique or solution i.e utilise RITA for additional beaconing detection from Zeek data).
+## Example Detections
+Some examples of detections for various malware C2 behaviors (it will not detect everything, layer against failure of a single detection technique or solution i.e utilise RITA for additional beaconing detection from Zeek data) and use additional packages for other C2 techniques such as the wireguard package which may be used by tools like SLIVER.
 
 https://malware-traffic-analysis.net/2025/09/24/index.html
 <img width="1809" height="185" alt="image" src="https://github.com/user-attachments/assets/5b918b3f-009f-4c81-b924-a1623a3a22a8" />
