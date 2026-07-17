@@ -347,12 +347,14 @@ export {
         # broadly present in enterprise networks and carry
         # low C2-abuse risk on their own apex/vendor domains.
         # ---------------------------------------------------------------
-        # Cisco (Webex, DNA Center, corporate services, Secure Access/SIG).
+        # Cisco (Webex, DNA Center, corporate services, Secure Access/SIG) etc.
         ".cisco.com",
         ".webex.com",
+        ".wbx2.com",
         ".ciscodna.com",
         ".ciscoconnectdna.com",
         ".ciscospark.com",
+        ".ciscolabs.com",
         # Apple
         ".apple.com",
         ".ibook.info",
