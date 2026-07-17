@@ -1,6 +1,6 @@
 # C2 Detection — SSL/TLS module
 
-## Initial Notes On Detector
+## Initial notes on detector
 WHILE THIS IS IN DEVELOPMENT. I APPRECIATE ALL FEEDBACK THAT COULD ENHANCE THIS PACKAGE (Especially decreasing any false negatives/positives or increasing performance further). 
 CURRENT WORK ON FINAL IMPROVEMENTS AND FIXES IS ONGOING.
 
@@ -21,7 +21,7 @@ zeek/micrictor/spl-spt**
 
 The intention is that this will eventually become a zkg installable package. You are free to use this package for testing purposes. Other protocols will then be looked at (namely HTTP, unknown TCP for custom binary protocols and RATs communicating) and SSH tunnels. Other protocols/detections may not be needed, for instance wireguard is already detected via zeek/corelight/zeek-spicy-wireguard (SLIVER and other tooling may use this protocol), ICMP and DNS already have detection packages in place but this may still be looked at if there is any gaps.
 
-## Package Scope
+## Package scope
 Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8.
 Designed for noisy enterprise networks (tens of thousands users & devices, mixed PC/IoT etc).
 
@@ -29,7 +29,7 @@ False positives are the dominant operational cost. The framework is designed
 to be conservative by default: delayed, high-confidence alerts are preferable
 to noisy low-confidence ones.
 
-## Example Detections
+## Example detections
 Some examples of detections for various malware C2 behaviors (it will not detect everything, layer against failure of a single detection technique or solution i.e utilise RITA for additional beaconing detection from Zeek data) and use additional packages for other C2 techniques such as the wireguard package which may be used by tools like SLIVER.
 
 https://malware-traffic-analysis.net/2025/09/24/index.html
