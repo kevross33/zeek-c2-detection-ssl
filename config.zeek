@@ -520,7 +520,7 @@ export {
     #   - any existing flow_state for it is deleted
     #   - future connections to it are not tracked at all
     #
-    # Rationale: real C2 in a hospital network is overwhelmingly likely
+    # Rationale: real C2 in a network is overwhelmingly likely
     # to involve very few infected clients (often one). Legitimate
     # destinations have many clients. A threshold of 5 catches both
     # small (single-malware) and double-infection cases while excluding
@@ -529,7 +529,7 @@ export {
     # Note: this is independent of the M365 / safe-suffix bypass — those
     # don't even reach popularity tracking. This rule catches the long
     # tail of legitimate niche services that aren't pre-allowlisted.
-    option popular_dest_threshold: count = 5;
+    option popular_dest_threshold: count = 3;
 
     # ------------------------------------------------------------------
     # Fan-out prevalence gating (the "new C2 is 1:1" principle).
