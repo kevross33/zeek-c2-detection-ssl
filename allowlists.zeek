@@ -353,6 +353,13 @@ export {
         ".ciscodna.com",
         ".ciscoconnectdna.com",
         ".ciscospark.com",
+        # Apple
+        ".apple.com",
+        ".ibook.info",
+        ".itools.info",
+        ".airport.us",
+        ".icloud.com",
+        ".apple-cloudkit.com",
         # Azure first-party monitoring / security telemetry.
         ".opinsights.azure.com",       # Azure Monitor / Log Analytics (MMA/OMS)
         ".atp.azure.com",              # Defender for Identity (Azure ATP)
