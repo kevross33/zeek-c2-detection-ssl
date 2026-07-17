@@ -32,6 +32,9 @@ to noisy low-confidence ones.
 
 Some examples of detections (it will not detect everything, layer against failure of a single detection technique or solution i.e utilise RITA for additional beaconing detection from Zeek data).
 
+https://malware-traffic-analysis.net/2025/09/24/index.html
+<img width="1809" height="185" alt="image" src="https://github.com/user-attachments/assets/5b918b3f-009f-4c81-b924-a1623a3a22a8" />
+
 https://www.malware-traffic-analysis.net/2023/10/16/index.html
 <img width="1853" height="662" alt="image" src="https://github.com/user-attachments/assets/905c38be-0ac4-4cea-9b8b-364ff69e6a1c" />
 
