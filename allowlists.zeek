@@ -211,6 +211,23 @@ export {
         ".cortana.ai",
 
         # ---------------------------------------------------------------
+        # Endpoint Detection Response & Misc Security solutions
+        # ---------------------------------------------------------------
+        ".crowdstrike.com",
+        ".sentinelone.net",
+        ".paloaltonetworks.com",
+        ".confer.net",
+        ".carbonblack.io",
+        ".amp.cisco.com",
+        ".amp.sourcefire.com",
+        ".bitdefender.net",
+        ".obsrvbl.com",
+        ".es.cisco.com",
+        ".csc.cisco.com",
+        ".binalyze.io",
+        ".splunkcloud.com",
+
+        # ---------------------------------------------------------------
         # OneDrive consumer sync client (IDs 35, 36, 53)
         # Distinct from SharePoint Online tenant OneDrive.
         # ---------------------------------------------------------------
@@ -273,7 +290,7 @@ export {
         "edge.microsoft.com",         # Edge browser update / config
         ".edge.microsoft.com",
         "config.edge.skype.com",      # Edge / Teams config (already in Teams block above)
-        ".telecommand.telemetry.microsoft.com",
+        ".telemetry.microsoft.com",
         ".settings-win.data.microsoft.com",
         "apis.live.net",
 
@@ -335,6 +352,7 @@ export {
         ".webex.com",
         ".ciscodna.com",
         ".ciscoconnectdna.com",
+        ".ciscospark.com",
         # Azure first-party monitoring / security telemetry.
         ".opinsights.azure.com",       # Azure Monitor / Log Analytics (MMA/OMS)
         ".atp.azure.com",              # Defender for Identity (Azure ATP)
@@ -346,6 +364,20 @@ export {
         # Adobe API / service endpoints.
         ".adobe.io",
         ".adobess.com",
+        # Google Meet
+        ".meet.google.com",
+        ".chat.google.com",
+        # Zoom
+        ".zoom.us",
+        ".zoom.com",
+        # Okta
+        ".okta.com",
+        ".oktacdn.com",
+        # Duo
+        ".duosecurity.com",
+        # Auth0
+        ".auth0.com",
+        ".pingidentity.com",
     };
 
     # ------------------------------------------------------------------
