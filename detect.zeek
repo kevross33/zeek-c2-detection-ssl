@@ -75,37 +75,6 @@ event http_request(c: connection, method: string, original_URI: string,
 
 
 
-# is_sni_masquerade — detect an allowlisted first-party SNI presented on
-# infrastructure whose certificate demonstrably does not back it. This is
-# the domain-fronting-adjacent evasion where malware sets SNI to e.g.
-# client.wns.windows.com on attacker-controlled infrastructure.
-#
-# CONSERVATIVE: returns T only when we can SEE the cert and it positively
-# fails to cover the SNI AND fails validation. A genuine first-party
-# connection always presents a valid, matching cert, so this never fires on
-# real Microsoft/O365 traffic. Skips proxy-intercepted flows (cert is the
-# proxy's) and resumed sessions with no cert exchanged (nothing to check).
-function is_sni_masquerade(c: connection): bool
-    {
-    if ( ! masquerade_guard_enabled )
-        return F;
-    if ( ! c?$ssl )
-        return F;
-    # Skip when the cert isn't the real upstream's or wasn't exchanged.
-    if ( c$ssl?$resumed && c$ssl$resumed )
-        return F;
-    # Need Zeek's SAN-aware match verdict and a validation status.
-    if ( ! c$ssl?$sni_matches_cert || ! c$ssl?$validation_status )
-        return F;
-    # Masquerade = cert does NOT cover the SNI AND does not validate ok.
-    if ( ! c$ssl$sni_matches_cert &&
-         c$ssl$validation_status != "ok" &&
-         c$ssl$validation_status != "" &&
-         c$ssl$validation_status != "-" )
-        return T;
-    return F;
-    }
-
 # Returns T if this connection should be completely ignored.
 # Called from every entry point before any work is done.
 function triage_skip(c: connection): bool
@@ -121,16 +90,32 @@ function triage_skip(c: connection): bool
     if ( is_dest_trusted(c$id$resp_h) )   return T;
     # Skip flows where the originator IS a proxy (proxy→upstream)
     if ( is_proxy_destination(c$id$orig_h) ) return T;
+    # An operator allowlist entry is ABSOLUTE. If a destination has been
+    # explicitly declared safe it is never analysed, and nothing revokes that
+    # — no certificate condition, no cert/SNI mismatch, no validation
+    # failure. Rationale: an allowlist the tool silently overrides is worse
+    # than no allowlist, because the operator cannot reason about what the
+    # tool is doing. Plenty of legitimate infrastructure (on-prem appliances,
+    # vendor devices, embedded web UIs, medical/lab equipment) serves a real
+    # hostname with a self-signed or non-matching certificate, and revoking
+    # the bypass for those produced intermittent false positives that
+    # devalued every alert around them.
+    #
+    # Domain fronting is NOT abandoned — it is handled where it belongs:
+    #   * trusted_pivot_suffixes: legitimate-but-abusable platforms stay
+    #     under full behavioural analysis rather than being bypassed.
+    #   * cert_sni_mismatch is still scored on every non-allowlisted flow.
+    # Reliable SNI-vs-Host-header comparison requires decryption and is a
+    # proxy/firewall function; this package detects C2 by BEHAVIOUR, so a
+    # fronted channel is caught by its beacon/tunnel shape, not by its cert.
     if ( c?$ssl && c$ssl?$server_name &&
-         is_sni_fully_safe(c$ssl$server_name) &&
-         ! is_sni_masquerade(c) )
+         is_sni_fully_safe(c$ssl$server_name) )
         return T;
     # Also honour the plaintext CONNECT host for the safe-SNI bypass. This
     # matters for proxied HTTPS where SNI may be absent (Encrypted Client
     # Hello) but the CONNECT target is a known-safe first-party service.
     if ( c$uid in connect_host_by_uid &&
-         is_sni_fully_safe(connect_host_by_uid[c$uid]) &&
-         ! is_sni_masquerade(c) )
+         is_sni_fully_safe(connect_host_by_uid[c$uid]) )
         return T;
 
     # Popularity bypass — destinations contacted by >popular_dest_threshold
@@ -2198,9 +2183,9 @@ event ssl_established(c: connection) &priority = -5
     if ( is_orig_trusted(c$id$orig_h) )       return;
     if ( is_dest_trusted(c$id$resp_h) )       return;
     if ( is_proxy_destination(c$id$orig_h) )  return;
+    # Operator allowlist entries are ABSOLUTE — see the note in triage_skip.
     if ( c?$ssl && c$ssl?$server_name &&
-         is_sni_fully_safe(c$ssl$server_name) &&
-         ! is_sni_masquerade(c) )
+         is_sni_fully_safe(c$ssl$server_name) )
         return;
 
     # Track per-destination client population (the 5-host rule).
