@@ -385,16 +385,34 @@ export {
     option fingerprint_arm_max_hosts: count = 3;
 
     # ------------------------------------------------------------------
-    # SNI / cert masquerade guard.
+    # SNI / cert masquerade guard — REMOVED (deliberately).
     # ------------------------------------------------------------------
     #
-    # Domain-fronting-adjacent evasion: a flow presents a first-party SNI
-    # (e.g. client.wns.windows.com) on attacker infrastructure. Withhold the
-    # allowlist free pass ONLY when the certificate is visible and demonstrably
-    # does NOT cover the claimed SNI and does not validate. A genuine
-    # first-party connection always has a valid, matching cert, so this never
-    # fires on real Microsoft/O365 traffic.
-    option masquerade_guard_enabled: bool = T;
+    # This previously withheld the safe-SNI allowlist bypass when a flow
+    # presented an allowlisted SNI whose certificate did not cover it and did
+    # not validate, as a domain-fronting counter-measure.
+    #
+    # It was removed because an operator allowlist entry must be ABSOLUTE. The
+    # guard silently revoked explicit allowlist entries for a large population
+    # of legitimate infrastructure that serves a real hostname with a
+    # self-signed or non-matching certificate — on-prem appliances, vendor
+    # devices, embedded web UIs, medical and lab equipment. Worse, it did so
+    # INTERMITTENTLY: the guard skipped resumed sessions (no certificate is
+    # exchanged, so there is nothing to compare), so the same destination
+    # alerted on full handshakes and stayed silent on resumed ones. The
+    # resulting noise made it impossible for an analyst to distinguish a false
+    # positive from real C2, which devalues every surrounding alert.
+    #
+    # Domain fronting is still covered, in the places suited to it:
+    #   * trusted_pivot_suffixes — legitimate-but-abusable platforms are NOT
+    #     bypassed; they stay under full behavioural analysis plus
+    #     rare-fingerprint pivot detection.
+    #   * cert_sni_mismatch is still scored on every non-allowlisted flow.
+    # Reliably detecting domain fronting means comparing the SNI against the
+    # inner Host header, which requires decryption — a proxy/firewall
+    # function. This package detects C2 by BEHAVIOUR, so a fronted channel is
+    # caught by its beacon/tunnel/reverse-flow shape regardless of what its
+    # certificate claims.
 
     # ------------------------------------------------------------------
     # Emerging / pre-beacon C2 (early warning).
