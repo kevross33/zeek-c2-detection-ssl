@@ -226,6 +226,8 @@ export {
         ".csc.cisco.com",
         ".binalyze.io",
         ".splunkcloud.com",
+        ".eset.systems",
+        ".eset.com",
 
         # ---------------------------------------------------------------
         # OneDrive consumer sync client (IDs 35, 36, 53)
