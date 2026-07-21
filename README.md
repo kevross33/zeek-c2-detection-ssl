@@ -274,6 +274,25 @@ an alert:
   of intervals and abstains once sleep-gaps dominate, so it never rescues a
   genuinely chaotic flow.
 
+- **Inter-arrival-time entropy — a timing-predictability confirmation.**
+  Shannon entropy of the inter-arrival gaps measures how *predictable* the
+  timing is — a distinct axis from how *dispersed* it is (jitter/MAD/IQR). A
+  scheduler firing on a cadence concentrates its gaps into a few time-buckets
+  (low entropy); human/app traffic spreads them unpredictably (high entropy).
+  The binning is **relative** — each bin is a fraction of the median gap
+  (`iat_entropy_bin_fraction`, 10% by default) — which makes the measure
+  *scale-invariant*: the same proportional jitter yields the same entropy
+  whether the beacon is 5 s or 3600 s. (An absolute bin would be the classic
+  trap, reading a fast beacon as regular and an identically-jittered slow
+  beacon as chaos.) It is a **confirmation only, never a gate**: a
+  clearly-predictable beacon (entropy ≤ `iat_entropy_low`, 3.0 bits) earns a
+  small bonus and the `predictable_timing` indicator; a high-entropy flow
+  earns *nothing* — no penalty, no exclusion. Because it can only ever add
+  confidence to a beacon the timing/shape logic has already confirmed, a
+  conservative threshold cannot cause false negatives — it errs toward fewer
+  confirmations rather than looser detection. Reported always as `iat_ent=`
+  in the alert details.
+
 - **Payload-staging / stage transition.** Inside an **already-confirmed** C2,
   a large **download** burst (server→client) whose size is consistent with an
   executable/payload — either above an absolute floor
