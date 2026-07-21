@@ -290,6 +290,55 @@ export {
     # jitter ratio) or chaotic ones (correctly excluded).
     option iqr_jittered_confirm_bonus: double = 0.10;
 
+    # ------------------------------------------------------------------
+    # Inter-arrival-time entropy — timing-predictability confirmation.
+    # ------------------------------------------------------------------
+    #
+    # Shannon entropy of the inter-arrival gaps measures how PREDICTABLE the
+    # timing is, which is a different axis from how DISPERSED it is (jitter /
+    # MAD / IQR). A scheduler firing on a cadence concentrates its gaps into a
+    # few time-buckets -> low entropy. Human/app traffic spreads its gaps
+    # unpredictably -> high entropy. This can confirm a beacon whose jitter
+    # ratio sits in a borderline tier by showing the timing is nonetheless
+    # highly regular in the information-theoretic sense.
+    #
+    # BINNING IS RELATIVE (a fraction of the median gap), which makes the
+    # measure scale-invariant: the same proportional jitter yields the same
+    # entropy whether the beacon is 5s or 3600s. An absolute bin would be the
+    # classic trap — it reads fast beacons as regular and identically-jittered
+    # slow beacons as chaos. Do not change this to an absolute interval.
+    #
+    # CONFIRMATION ONLY, never a gate: low entropy adds a small bonus; high
+    # entropy adds NOTHING (no penalty). Timing dispersion (jitter tiers) and
+    # the other signals remain the primary detectors — entropy just adds
+    # corroboration when the timing is clearly predictable. Because it can only
+    # ever ADD confidence to an already-confirmed beacon, a conservative (low)
+    # threshold cannot cause false negatives; it errs toward fewer
+    # confirmations rather than looser detection.
+
+    option iat_entropy_enabled: bool = T;
+
+    # Minimum interval samples before entropy is trusted (entropy of a handful
+    # of gaps is meaningless). Set above the beacon minimum so this only
+    # applies to well-established flows.
+    option iat_entropy_min_samples: count = 12;
+
+    # Relative bin width as a fraction of the median gap. 0.10 (10% of the
+    # median) cleanly separates real beacons (incl. jittered) from chaos in
+    # testing. Smaller over-reports randomness; larger blurs distinct cadences.
+    option iat_entropy_bin_fraction: double = 0.10;
+
+    # Entropy (bits) at/below which the timing is treated as clearly
+    # predictable. Real beacons up to ~30-40% jitter sit around 1.3-2.9 bits;
+    # chaotic/human traffic sits around 4+ bits. 3.0 confirms genuine beacons
+    # (including jittered ones) while staying well clear of chaos.
+    option iat_entropy_low: double = 3.0;
+
+    # Confirmation bonus when a confirmed beacon also has clearly-predictable
+    # (low-entropy) timing. Small and additive — corroboration, not a detector.
+    option iat_entropy_bonus: double = 0.08;
+
+
 
 
     # Connections closer than this are collapsed into one "burst".
