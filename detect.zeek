@@ -620,6 +620,13 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
             return;
         }
 
+    # Lag-1 autocorrelation of the inter-arrival gaps — detects patterned
+    # (period-2) sleeps that inflate jitter while being mechanical. Computed
+    # once here and reused below (abandonment exception, confirmation bonus,
+    # forensic reporting). 0.0 when there is no evidence.
+    local ac_r1 = autocorr_enabled && |gaps| >= autocorr_min_samples ?
+                  lag1_autocorr(gaps) : 0.0;
+
     # ---- Active abandonment: genuinely chaotic, unpinned, well-sampled. ----
     #
     # Only abandon a flow as "definitely not a beacon" when it is beyond
@@ -627,11 +634,22 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
     # This is far more conservative than before (which abandoned at 50%),
     # so jittered C2 in the 30-60% band is retained and scored rather than
     # silently dropped — trading a little memory for fewer false negatives.
+    #
+    # EXCEPTION — patterned-sleep evasion: a strong alternating (period-2)
+    # sleep inflates jitter past the chaotic threshold precisely to get
+    # dropped here, while being perfectly mechanical. If lag-1 autocorrelation
+    # shows genuine strong-negative structure on a well-sampled flow, we do
+    # NOT abandon it — we keep tracking so its suspiciousness can build over
+    # time. Keeping state cannot itself alert (the flow still faces every
+    # normal gate), so this is false-positive-safe.
     if ( jitter > beacon_chaotic_threshold && ! is_pinned &&
          st$total_seen >= early_jitter_sample_floor )
         {
-        delete flow_state[k];
-        return;
+        if ( ! ( autocorr_enabled && ac_r1 <= autocorr_strong_negative ) )
+            {
+            delete flow_state[k];
+            return;
+            }
         }
 
     if ( ! is_pinned && st$total_seen < beacon_alert_min_count )
@@ -808,6 +826,20 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         {
         conf += iat_entropy_bonus;
         add indicators["predictable_timing"];
+        }
+
+    # ---- Lag-1 autocorrelation confirmation (patterned sleeps) ----
+    # Strong-negative r1 means a period-2 alternating cadence — mechanical
+    # timing that MAD/jitter/entropy read only as "high spread". Contributor
+    # only: a small bonus on a beacon that reaches scoring, never a decider.
+    # ac_r1 was computed above (and may already have kept this flow alive past
+    # the chaotic-abandonment gate).
+    if ( autocorr_enabled &&
+         |gaps| >= autocorr_min_samples &&
+         ac_r1 <= autocorr_strong_negative )
+        {
+        conf += autocorr_bonus;
+        add indicators["patterned_sleep_cadence"];
         }
 
     # No SNI — common in lower-quality C2 tooling contacting raw IPs.
@@ -1358,11 +1390,11 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         }
 
     local details = fmt(
-        "%scnt=%d hb_sz=%d pdens=%.0f%% iqr=%.2fs iat_ent=%.2f tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
+        "%scnt=%d hb_sz=%d pdens=%.0f%% iqr=%.2fs iat_ent=%.2f r1=%.2f tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
         st$via_proxy ? "[via-proxy] " : "",
         st$total_seen, hb_size,
         peak_density(st$resp_size_window) * 100.0,
-        gap_iqr, iat_ent,
+        gap_iqr, iat_ent, ac_r1,
         tasks, exfil, payload_detail,
         jitter * 100.0, med, res_ratio * 100.0, sleep_count);
 
