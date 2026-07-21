@@ -249,12 +249,14 @@ export {
     # ------------------------------------------------------------------
     #
     # IQR (P75 - P25) of the inter-arrival gaps is the spread of the MIDDLE
-    # 50% of intervals, discarding the outer quartiles. On a long-lived C2
-    # session an operator waking the beacon to run a command injects a few
-    # very long gaps (and network stalls a few very short ones); those sit in
-    # the outer quartiles and so leave the IQR untouched. A tight IQR
-    # therefore tells us the CORE cadence is mechanical even when the overall
-    # jitter ratio looks high because of a handful of sleep outliers.
+    # 50% of intervals, discarding the outer quartiles. Judged RELATIVE to the
+    # interval (IQR / median): a real beacon — whether its jitter is a few
+    # outlier sleeps or an even +/-30% on every check-in — keeps that ratio
+    # well under 1, because the spread is proportionate to the cadence.
+    # Chaotic human/app traffic has a spread that rivals or exceeds its own
+    # median. This separates bounded, proportionate jitter from genuine
+    # irregularity, and (unlike an absolute-seconds test) it works for the
+    # common evenly-jittered beacon, not just the outlier-sleep profile.
     #
     # This is used as a QUALIFIER, not a new confidence axis (the jitter
     # ratio already scores regularity, and MAD is already outlier-robust —
@@ -262,11 +264,11 @@ export {
     # Its jobs are:
     #   * FORENSIC: report the absolute middle-50% spread (iqr=) in every
     #     beacon alert so an analyst can see the core cadence directly.
-    #   * CONFIRMATION: when a beacon is in the JITTERED tier, a tight IQR
-    #     confirms the jitter is OUTLIER-DRIVEN (real beacon + a few sleeps)
-    #     rather than genuine irregularity, earning a small confirmation
-    #     bonus. A jittered beacon whose middle 50% is ALSO loose gets
-    #     nothing here — that is what genuine chaos looks like.
+    #   * CONFIRMATION: when a beacon is in the JITTERED tier, a proportionate
+    #     relative IQR confirms the jitter is BOUNDED (a real cadence with
+    #     jitter, whether even or outlier-driven) rather than genuine
+    #     irregularity, earning a small confirmation bonus. A jittered flow
+    #     whose spread rivals its own interval gets nothing — that is chaos.
 
     option iqr_qualifier_enabled: bool = T;
 
@@ -274,11 +276,13 @@ export {
     # reasonable number of points to be stable).
     option iqr_min_samples: count = 10;
 
-    # Absolute IQR (seconds) at/below which the middle-50% cadence is
-    # considered mechanically tight. 0.5s follows the source guidance: the
-    # core of a machine beacon barely moves, so half a second of spread in
-    # the central bulk is comfortably mechanical.
-    option iqr_tight_seconds: double = 0.5;
+    # Relative IQR ceiling: (P75 - P25) / median. At or below this, the
+    # middle-50% spread is proportionate to the interval — bounded jitter
+    # around a real cadence, not chaos. Real jittered beacons observed in
+    # practice sit around 0.3-0.55 (a +/-30% jitter yields roughly that);
+    # human/app traffic has a spread that rivals its own median (>= ~1.0).
+    # 0.75 confirms genuine bounded jitter while still rejecting chaos.
+    option iqr_proportionate_max: double = 0.75;
 
     # Confirmation bonus when a JITTERED-tier beacon has a tight IQR (the
     # outlier-driven-jitter case). Small and additive — a confirmation, not a
