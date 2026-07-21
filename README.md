@@ -31,24 +31,26 @@ to noisy low-confidence ones.
 ## Example detections
 Some examples of detections for various malware C2 behaviors (it will not detect everything, layer against failure of a single detection technique or solution i.e utilise RITA for additional beaconing detection from Zeek data) and use additional packages for other C2 techniques such as the wireguard package which may be used by tools like SLIVER.
 
-https://malware-traffic-analysis.net/2025/09/24/index.html
-<img width="1809" height="185" alt="image" src="https://github.com/user-attachments/assets/5b918b3f-009f-4c81-b924-a1623a3a22a8" />
+NETSUPPORT RAT (https://malware-traffic-analysis.net/2026/05/22/index.html)
+<img width="1758" height="157" alt="image" src="https://github.com/user-attachments/assets/ebc53450-099e-4367-b6bf-59eb573bfe69" />
 
-https://www.malware-traffic-analysis.net/2023/10/16/index.html
-<img width="1853" height="662" alt="image" src="https://github.com/user-attachments/assets/905c38be-0ac4-4cea-9b8b-364ff69e6a1c" />
+PIKABOT (https://malware-traffic-analysis.net/2024/02/08/index.html)
+<img width="1762" height="442" alt="image" src="https://github.com/user-attachments/assets/8218d6b1-ace9-4a02-bf26-64eb81631c48" />
 
-https://www.malware-traffic-analysis.net/2021/12/13/index.html
-<img width="2357" height="1217" alt="image" src="https://github.com/user-attachments/assets/2aea7ed9-fa4c-43b8-b255-8ca1b60c8308" />
+TRICKBOT (https://malware-traffic-analysis.net/2020/02/26/index.html)
+<img width="1757" height="232" alt="image" src="https://github.com/user-attachments/assets/7fabc663-f8c1-4d45-a959-1caba488583f" />
 
-https://www.malware-traffic-analysis.net/2020/02/26/index.html
-<img width="2487" height="315" alt="image" src="https://github.com/user-attachments/assets/e665e470-a5e3-4c73-a889-a8d5af40a364" />
+COBALTSTRIKE https://malware-traffic-analysis.net/2022/02/07/index.html
+<img width="1753" height="85" alt="image" src="https://github.com/user-attachments/assets/8788ca1e-60b0-401a-b3f2-60db45cc0148" />
 
-https://www.activecountermeasures.com/malware-of-the-day-icedid-loader-to-alphv-ransomware-campaign/
-<img width="2488" height="189" alt="image" src="https://github.com/user-attachments/assets/f2390464-6899-4088-b0dd-a2ae3fdce7d2" />
+ICEDID (https://malware-traffic-analysis.net/2023/10/18/index.html)
+<img width="1759" height="298" alt="image" src="https://github.com/user-attachments/assets/6e1bd5d8-ed25-45e3-94dc-6bc3fbd7307d" />
 
-https://www.activecountermeasures.com/malware-of-the-day-tunneled-c2-beaconing/
-<img width="2478" height="273" alt="image" src="https://github.com/user-attachments/assets/27dda7b4-190c-4a9f-946d-f97b409734eb" />
+SLIVER Tunnelled through Ligolo-ng (https://www.activecountermeasures.com/malware-of-the-day-tunneled-c2-beaconing/)
+<img width="1754" height="233" alt="image" src="https://github.com/user-attachments/assets/9bbdef34-7410-4fff-a7ab-fc3274bb93e5" />
 
+Custom Go-based C2 (Numinon) (https://www.activecountermeasures.com/malware-of-the-day-multi-modal-c2-communication-numinon-c2/)
+<img width="1753" height="1134" alt="image" src="https://github.com/user-attachments/assets/da67777e-8757-460c-a5b2-f203dbb4931b" />
 
 ## What it detects
 
