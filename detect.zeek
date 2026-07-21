@@ -738,6 +738,33 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
     if ( skew_tag != "" )
         add indicators[skew_tag];
 
+    # ---- Payload-size Peak Density corroborator ----
+    # Attackers jitter timing, but an idle check-in is a fixed size. Strong
+    # concentration of the response-size distribution is therefore a
+    # timing-independent "mechanical heartbeat" signal. Applied as a positive
+    # corroborator only; it never creates or blocks a detection. The larger
+    # bonus is reserved for the UPPER-TIER (jittered) case, where timing looks
+    # evasive but the fixed payload size betrays the beacon — the specific
+    # false-negative this is meant to rescue.
+    if ( peak_density_enabled &&
+         |st$resp_size_window| >= peak_density_min_samples )
+        {
+        local pdens = peak_density(st$resp_size_window);
+        if ( pdens >= peak_density_strong )
+            {
+            if ( is_jittered )
+                {
+                conf += peak_density_jittered_bonus;
+                add indicators["fixed_size_heartbeat_jittered"];
+                }
+            else
+                {
+                conf += peak_density_bonus;
+                add indicators["fixed_size_heartbeat"];
+                }
+            }
+        }
+
     # No SNI — common in lower-quality C2 tooling contacting raw IPs.
     if ( st$sni == "" || st$sni == "(empty)" )
         {
@@ -1286,9 +1313,11 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         }
 
     local details = fmt(
-        "%scnt=%d hb_sz=%d tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
+        "%scnt=%d hb_sz=%d pdens=%.0f%% tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
         st$via_proxy ? "[via-proxy] " : "",
-        st$total_seen, hb_size, tasks, exfil, payload_detail,
+        st$total_seen, hb_size,
+        peak_density(st$resp_size_window) * 100.0,
+        tasks, exfil, payload_detail,
         jitter * 100.0, med, res_ratio * 100.0, sleep_count);
 
     local rep_uid = "";
