@@ -612,21 +612,6 @@ function quantile_sorted(s: vector of double, q: double): double
     return s[lo] + (s[hi] - s[lo]) * frac;
     }
 
-# bowley_skewness — quartile-based (robust) skewness of a double vector.
-#
-#   skew = (Q1 + Q3 - 2*Q2) / (Q3 - Q1)
-#
-# Range is [-1, 1]. Zero means a symmetric distribution; positive means a
-# right (long high-side) tail, negative a left tail. RITA uses this on beacon
-# inter-arrival deltas: a genuine beacon has a SYMMETRIC delta distribution
-# (skew ~ 0), even when jittered, whereas bursty human/app traffic that
-# merely clusters tends to have a lopsided tail. Bowley is chosen over
-# moment skewness because quartiles are robust to a few outlier sleep gaps,
-# consistent with the MAD/median approach used elsewhere here.
-#
-# Returns 0.0 (treated as "symmetric / no evidence") when there are too few
-# samples or the interquartile range is degenerate, so callers can gate on
-# sample count and never divide by zero.
 # iqr_spread — the absolute inter-quartile spread (P75 - P25) of a double
 # vector, in the vector's own units (seconds, for inter-arrival gaps).
 #
@@ -636,11 +621,10 @@ function quantile_sorted(s: vector of double, q: double): double
 # to run a command injects a few very long inter-arrival gaps (and network
 # stalls inject a few very short ones). Those live in the outer quartiles, so
 # they do NOT affect the IQR — whereas they can still move MAD if the outlier
-# cluster is large enough. A small IQR therefore CONFIRMS that the beacon's
-# core cadence is mechanically tight even when its overall jitter looks high
-# because of a handful of sleep outliers. Used as a qualifier/forensic metric,
-# not as an independent confidence axis (the jitter ratio already scores
-# regularity — this confirms whether apparent jitter is outlier-driven).
+# cluster is large enough. Used as a qualifier/forensic metric, not as an
+# independent confidence axis (the jitter ratio already scores regularity —
+# this confirms whether apparent jitter is bounded/proportionate rather than
+# genuine irregularity; see iqr_proportionate_max in config.zeek).
 #
 # Returns 0.0 for fewer than 4 samples (quartiles need a minimum spread of
 # points to be meaningful), which callers treat as "no evidence".
@@ -656,6 +640,21 @@ function iqr_spread(v: vector of double): double
     return q3 - q1;
     }
 
+# bowley_skewness — quartile-based (robust) skewness of a double vector.
+#
+#   skew = (Q1 + Q3 - 2*Q2) / (Q3 - Q1)
+#
+# Range is [-1, 1]. Zero means a symmetric distribution; positive means a
+# right (long high-side) tail, negative a left tail. RITA uses this on beacon
+# inter-arrival deltas: a genuine beacon has a SYMMETRIC delta distribution
+# (skew ~ 0), even when jittered, whereas bursty human/app traffic that
+# merely clusters tends to have a lopsided tail. Bowley is chosen over
+# moment skewness because quartiles are robust to a few outlier sleep gaps,
+# consistent with the MAD/median approach used elsewhere here.
+#
+# Returns 0.0 (treated as "symmetric / no evidence") when there are too few
+# samples or the interquartile range is degenerate, so callers can gate on
+# sample count and never divide by zero.
 function bowley_skewness(v: vector of double): double
     {
     local n = |v|;
