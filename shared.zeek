@@ -330,6 +330,7 @@ export {
     # for degenerate or too-small inputs.
     global bowley_skewness: function(v: vector of double): double;
     global quantile_sorted: function(s: vector of double, q: double): double;
+    global iqr_spread: function(v: vector of double): double;
     global mode_count: function(v: vector of count): count;
     global peak_density: function(v: vector of count): double;
     global median_count: function(v: vector of count): count;
@@ -626,6 +627,35 @@ function quantile_sorted(s: vector of double, q: double): double
 # Returns 0.0 (treated as "symmetric / no evidence") when there are too few
 # samples or the interquartile range is degenerate, so callers can gate on
 # sample count and never divide by zero.
+# iqr_spread — the absolute inter-quartile spread (P75 - P25) of a double
+# vector, in the vector's own units (seconds, for inter-arrival gaps).
+#
+# This is the spread of the MIDDLE 50% of the samples, which explicitly
+# discards the top and bottom quartiles. Its purpose here is robustness to
+# the specific reality of long-lived C2 sessions: an operator waking a beacon
+# to run a command injects a few very long inter-arrival gaps (and network
+# stalls inject a few very short ones). Those live in the outer quartiles, so
+# they do NOT affect the IQR — whereas they can still move MAD if the outlier
+# cluster is large enough. A small IQR therefore CONFIRMS that the beacon's
+# core cadence is mechanically tight even when its overall jitter looks high
+# because of a handful of sleep outliers. Used as a qualifier/forensic metric,
+# not as an independent confidence axis (the jitter ratio already scores
+# regularity — this confirms whether apparent jitter is outlier-driven).
+#
+# Returns 0.0 for fewer than 4 samples (quartiles need a minimum spread of
+# points to be meaningful), which callers treat as "no evidence".
+function iqr_spread(v: vector of double): double
+    {
+    local n = |v|;
+    if ( n < 4 )
+        return 0.0;
+    local s: vector of double = copy(v);
+    sort(s);
+    local q1 = quantile_sorted(s, 0.25);
+    local q3 = quantile_sorted(s, 0.75);
+    return q3 - q1;
+    }
+
 function bowley_skewness(v: vector of double): double
     {
     local n = |v|;
