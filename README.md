@@ -494,20 +494,26 @@ a keep-alive/heartbeat-style C2 agent.
 ## Installation
 
 ```bash
-# Optional but strongly recommended
-zkg install zeek/corelight/zeek-long-connections
+# Required (note some provide additional context only, SPL-SPT is required for timing however of TLS C2 and JA4 is used for determining rare client software as rarity could indicate malware, a common JA4 does not discard flows however if they are behaving like C2 and evidence is building as malware can spoof fingerprints or may be using an injected or legitimate source process that may result in a common JA4.
 zkg install zeek/foxio/ja4
+zkg install zeek/micrictor/spl-spt
+zkg install zeek/corelight/zeek-long-connections
+zkg install zeek/salesforce/ja3
 
 # Install this package
-zkg install /path/to/c2-detection-ssl   # or a git URL
+zkg install /path/to/zkg/c2-detection-ssl   # or a git URL
 ```
 
 Then in `local.zeek`:
 
 ```zeek
-@load c2-detection-ssl
-@load corelight/zeek-long-connections
-@load foxio/ja4
+@load ./zeek-c2-detection-ssl
+
+# May automatically be done during installation of package for these
+@load ./zeek-long-connections
+@load ./ja4
+@load ./spl-spt
+@load ./ja3
 
 # Configure proxies and device VLANs — see local.zeek.example
 redef C2_SSL::proxy_hosts += { 10.50.0.10 };
