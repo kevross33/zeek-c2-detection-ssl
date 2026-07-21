@@ -766,20 +766,33 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         }
 
     # ---- Inter-quartile timing spread (IQR) qualifier ----
-    # Confirms whether a JITTERED-tier beacon's jitter is outlier-driven (a
-    # real beacon plus a few operator/sleep gaps) rather than genuine chaos,
-    # by checking that the MIDDLE 50% of intervals is mechanically tight. This
-    # discards the outer-quartile outliers that inflate the overall jitter
-    # ratio on long-lived sessions. Forensic value always (reported as iqr=);
-    # a small confirmation bonus only in the jittered tier. Not applied to
-    # tight beacons (the jitter ratio already confirms them) or chaotic ones.
+    # Confirms that a JITTERED-tier beacon's timing is PROPORTIONATE (bounded
+    # jitter around a real cadence) rather than genuinely chaotic, by checking
+    # the middle-50% spread RELATIVE to the interval: rel_iqr = IQR / median.
+    #
+    # Why relative, not absolute: a beacon that jitters +/- ~30% on every
+    # check-in (Cobalt Strike, most RATs) has that jitter spread THROUGHOUT
+    # its intervals, so its absolute IQR is naturally tens of seconds and
+    # scales with the interval — an absolute sub-second test could never
+    # confirm it. What actually separates a mechanical beacon from chaos is
+    # that its IQR stays SMALL RELATIVE TO THE INTERVAL (rel_iqr well under 1),
+    # whereas human/app traffic has a spread that rivals or exceeds its own
+    # median (rel_iqr >= ~1). This also still catches the outlier-driven case
+    # (tight core + a few long sleeps -> rel_iqr ~ 0).
+    #
+    # Qualifier, not a new axis: reported always (iqr= in details); a small
+    # confirmation bonus only in the jittered tier, where it distinguishes
+    # "bounded, proportionate jitter" (real beacon) from "unbounded spread"
+    # (chaos). Not applied to tight beacons (the jitter ratio already confirms
+    # them) or to flows whose relative spread is chaos-like.
     local gap_iqr = iqr_spread(gaps);
+    local rel_iqr = med > 0.0 ? gap_iqr / med : 0.0;
     if ( iqr_qualifier_enabled && is_jittered &&
          |gaps| >= iqr_min_samples &&
-         gap_iqr <= iqr_tight_seconds )
+         med > 0.0 && rel_iqr <= iqr_proportionate_max )
         {
         conf += iqr_jittered_confirm_bonus;
-        add indicators["tight_core_cadence"];
+        add indicators["proportionate_cadence"];
         }
 
     # No SNI — common in lower-quality C2 tooling contacting raw IPs.
