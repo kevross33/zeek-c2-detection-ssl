@@ -795,6 +795,21 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         add indicators["proportionate_cadence"];
         }
 
+    # ---- Inter-arrival-time entropy confirmation ----
+    # Predictability of the timing (distinct axis from dispersion). Low
+    # entropy = the gaps concentrate in a few relative time-buckets = a
+    # scheduler on a cadence. Confirmation only: a clearly-predictable beacon
+    # earns a small bonus; a high-entropy flow earns nothing (never a penalty,
+    # never a gate). Reported always (iat_ent= in details) for forensics.
+    local iat_ent = iat_entropy(gaps, iat_entropy_bin_fraction);
+    if ( iat_entropy_enabled &&
+         |gaps| >= iat_entropy_min_samples &&
+         iat_ent <= iat_entropy_low )
+        {
+        conf += iat_entropy_bonus;
+        add indicators["predictable_timing"];
+        }
+
     # No SNI — common in lower-quality C2 tooling contacting raw IPs.
     if ( st$sni == "" || st$sni == "(empty)" )
         {
@@ -1343,11 +1358,11 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         }
 
     local details = fmt(
-        "%scnt=%d hb_sz=%d pdens=%.0f%% iqr=%.2fs tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
+        "%scnt=%d hb_sz=%d pdens=%.0f%% iqr=%.2fs iat_ent=%.2f tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
         st$via_proxy ? "[via-proxy] " : "",
         st$total_seen, hb_size,
         peak_density(st$resp_size_window) * 100.0,
-        gap_iqr,
+        gap_iqr, iat_ent,
         tasks, exfil, payload_detail,
         jitter * 100.0, med, res_ratio * 100.0, sleep_count);
 
