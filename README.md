@@ -239,6 +239,23 @@ an alert:
   and has its rarity demoted even when its exact hash is uncommon — attacking
   the "rare-but-benign browser" false-positive directly.
 
+- **Payload-size Peak Density — a timing-independent corroborator.**
+  Attackers jitter *timing* freely (sleeps up to ~99% on modern frameworks),
+  but an idle C2 check-in is inherently a *fixed size* — there is nothing to
+  vary when no command is queued. `peak_density(resp_size_window)` measures
+  how dominant the single most common response size is (count of the mode /
+  total samples). A strongly concentrated size distribution (≥ 80% by
+  default) is scored as a small positive corroborator on a beacon that has
+  **already confirmed on timing** — it never creates or blocks a detection.
+  The larger of the two bonuses is reserved for beacons sitting in the
+  **jittered** timing tier: strong size concentration there is the specific
+  signal that rescues a beacon whose timing jitter has evaded the tighter
+  tiers, because the fixed payload size still betrays it. (This is the
+  inverse of *payload-size padding* — e.g. Merlin's jitter, which
+  deliberately smears sizes across a range to produce a *low* peak density;
+  that is a different, not-yet-implemented signal, and this corroborator
+  correctly does not fire on it.)
+
 - **Payload-staging / stage transition.** Inside an **already-confirmed** C2,
   a large **download** burst (server→client) whose size is consistent with an
   executable/payload — either above an absolute floor
