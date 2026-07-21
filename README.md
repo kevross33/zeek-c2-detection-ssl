@@ -256,6 +256,24 @@ an alert:
   that is a different, not-yet-implemented signal, and this corroborator
   correctly does not fire on it.)
 
+- **Inter-quartile timing spread (IQR) — a jitter-outlier qualifier.** On a
+  long-lived C2 session, an operator waking the beacon to run a command
+  injects a few very long inter-arrival gaps (and network stalls a few very
+  short ones). `iqr_spread(gaps)` measures the spread of the *middle 50%* of
+  intervals (P75 − P25), which discards those outer-quartile outliers. It is
+  used as a **qualifier, not a new confidence axis** — the jitter ratio
+  already scores regularity, and the median-based MAD it uses is already
+  outlier-robust, so IQR would double-count if simply added as another
+  regularity bonus. Instead it does two things: it is always reported
+  (`iqr=` in the alert details) so an analyst can see the core cadence
+  directly, and it earns a small **confirmation** bonus only for a beacon in
+  the *jittered* tier whose middle 50% is nonetheless mechanically tight
+  (≤ 0.5 s by default) — confirming the jitter is outlier-driven (a real
+  beacon plus a few sleeps) rather than genuine irregularity. By
+  construction it fires only when the mechanical cadence is a clear majority
+  of intervals and abstains once sleep-gaps dominate, so it never rescues a
+  genuinely chaotic flow.
+
 - **Payload-staging / stage transition.** Inside an **already-confirmed** C2,
   a large **download** burst (server→client) whose size is consistent with an
   executable/payload — either above an absolute floor
