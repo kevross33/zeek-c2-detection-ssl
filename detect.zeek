@@ -765,6 +765,23 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
             }
         }
 
+    # ---- Inter-quartile timing spread (IQR) qualifier ----
+    # Confirms whether a JITTERED-tier beacon's jitter is outlier-driven (a
+    # real beacon plus a few operator/sleep gaps) rather than genuine chaos,
+    # by checking that the MIDDLE 50% of intervals is mechanically tight. This
+    # discards the outer-quartile outliers that inflate the overall jitter
+    # ratio on long-lived sessions. Forensic value always (reported as iqr=);
+    # a small confirmation bonus only in the jittered tier. Not applied to
+    # tight beacons (the jitter ratio already confirms them) or chaotic ones.
+    local gap_iqr = iqr_spread(gaps);
+    if ( iqr_qualifier_enabled && is_jittered &&
+         |gaps| >= iqr_min_samples &&
+         gap_iqr <= iqr_tight_seconds )
+        {
+        conf += iqr_jittered_confirm_bonus;
+        add indicators["tight_core_cadence"];
+        }
+
     # No SNI — common in lower-quality C2 tooling contacting raw IPs.
     if ( st$sni == "" || st$sni == "(empty)" )
         {
@@ -1313,10 +1330,11 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         }
 
     local details = fmt(
-        "%scnt=%d hb_sz=%d pdens=%.0f%% tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
+        "%scnt=%d hb_sz=%d pdens=%.0f%% iqr=%.2fs tasks=%d exfil=%d%s jit=%.0f%% int=%.1fs resump=%.0f%% sleeps=%d",
         st$via_proxy ? "[via-proxy] " : "",
         st$total_seen, hb_size,
         peak_density(st$resp_size_window) * 100.0,
+        gap_iqr,
         tasks, exfil, payload_detail,
         jitter * 100.0, med, res_ratio * 100.0, sleep_count);
 
