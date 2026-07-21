@@ -332,6 +332,7 @@ export {
     global quantile_sorted: function(s: vector of double, q: double): double;
     global iqr_spread: function(v: vector of double): double;
     global iat_entropy: function(gaps: vector of double, bin_frac: double): double;
+    global lag1_autocorr: function(x: vector of double): double;
     global mode_count: function(v: vector of count): count;
     global peak_density: function(v: vector of count): double;
     global median_count: function(v: vector of count): count;
@@ -733,6 +734,59 @@ function iat_entropy(gaps: vector of double, bin_frac: double): double
             h += p * (ln(p) / ln2);
         }
     return -h;
+    }
+
+# lag1_autocorr — lag-1 autocorrelation of a double vector, in [-1, 1].
+#
+#   r1 = Σ (x_i - μ)(x_{i-1} - μ)  /  Σ (x_i - μ)²
+#
+# Measures how each interval relates to its immediate predecessor:
+#   r1 ~ -1 : strong ALTERNATING (period-2) structure — short,long,short,long.
+#             This is a patterned-sleep evasion (a known Cobalt Strike-style
+#             profile technique): it inflates MAD/variance so the flow looks
+#             irregular, while being perfectly mechanical. MAD, jitter and
+#             entropy are all blind to it — they see "high spread" and nothing
+#             more. Lag-1 autocorrelation sees the hidden order.
+#   r1 ~  0 : independent gaps — random jitter OR a perfectly constant beacon.
+#             (So this NEVER rewards a plain or randomly-jittered beacon; those
+#             are already handled by the jitter tiers and entropy.)
+#   r1 ~ +1 : trending / monotonic drift (creeping sleep). Deliberately NOT
+#             treated as a signal here — slow drift is as often benign as not,
+#             and rewarding it risks false positives. Only STRONG-NEGATIVE r1
+#             is used, and only ever as corroboration.
+#
+# Note this is specifically a PERIOD-2 detector: longer-period patterns
+# (5,10,15,...) do not produce a strong negative r1 and are out of scope.
+#
+# Returns 0.0 (no evidence) for fewer than 4 samples or a degenerate
+# (zero-variance) series, so callers treat it as "no pattern".
+function lag1_autocorr(x: vector of double): double
+    {
+    local n = |x|;
+    if ( n < 4 )
+        return 0.0;
+    local mu = 0.0;
+    local i = 0;
+    while ( i < n ) { mu += x[i]; ++i; }
+    mu = mu / n;
+
+    local num = 0.0;
+    local den = 0.0;
+    i = 0;
+    while ( i < n )
+        {
+        local d = x[i] - mu;
+        den += d * d;
+        if ( i >= 1 )
+            num += d * (x[i - 1] - mu);
+        ++i;
+        }
+    if ( den <= 0.0 )
+        return 0.0;
+    local r = num / den;
+    if ( r > 1.0 )  r = 1.0;
+    if ( r < -1.0 ) r = -1.0;
+    return r;
     }
 
 function mode_count(v: vector of count): count
