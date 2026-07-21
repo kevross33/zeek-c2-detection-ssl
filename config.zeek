@@ -201,6 +201,50 @@ export {
     # the false-negative priority means we don't penalise a pinned beacon.
     option beacon_skew_asymmetric_penalty: double = 0.15;
 
+    # ------------------------------------------------------------------
+    # Payload-size Peak Density corroborator.
+    # ------------------------------------------------------------------
+    #
+    # Attackers jitter TIMING freely (sleeps up to ~99%), but an idle C2
+    # check-in is inherently a FIXED size — there is nothing to vary when no
+    # command is queued. So a highly concentrated response-size distribution
+    # (one size dominates the window) is a strong "mechanical heartbeat"
+    # signal that is INDEPENDENT of timing, and it survives timing evasion
+    # that has pushed a flow's jitter up toward the tier ceilings.
+    #
+    # peak_density(resp_size_window) = count(most common size) / total. This
+    # is applied ONLY as a positive corroborator on a beacon that has ALREADY
+    # confirmed on its timing behaviour — it never creates a detection and
+    # never gates one out. Its specific job is to RESCUE a beacon whose jitter
+    # sits in the upper (jittered) tier: strong size concentration there says
+    # "the timing looks evasive but the payload is mechanically fixed", which
+    # is exactly the size-jitter-resistant fingerprint of an idle beacon.
+    #
+    # NOTE: this is the inverse situation to payload PADDING (deliberately
+    # smeared sizes -> LOW peak density). That is a separate future signal;
+    # here we reward the far more common static-heartbeat case.
+
+    option peak_density_enabled: bool = T;
+
+    # Minimum samples before peak density is trusted (a couple of identical
+    # sizes on a tiny window is not evidence of a mechanical heartbeat).
+    option peak_density_min_samples: count = 10;
+
+    # Peak density at/above which the size distribution is "strongly
+    # concentrated" — one size dominates. Merlin-style padding sits far below
+    # this; a static heartbeat sits near 1.0.
+    option peak_density_strong: double = 0.80;
+
+    # Confidence added when a confirmed beacon also shows strong size
+    # concentration. Small — corroboration, not a detector.
+    option peak_density_bonus: double = 0.08;
+
+    # Larger corroboration when strong size concentration co-occurs with
+    # UPPER-TIER (jittered) timing — this is the evasion-rescue case, where
+    # the size signal is doing the most work. Still bounded and additive.
+    option peak_density_jittered_bonus: double = 0.12;
+
+
     # Connections closer than this are collapsed into one "burst".
     option beacon_burst_collapse: interval = 1sec;
 
