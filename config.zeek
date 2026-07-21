@@ -244,6 +244,49 @@ export {
     # the size signal is doing the most work. Still bounded and additive.
     option peak_density_jittered_bonus: double = 0.12;
 
+    # ------------------------------------------------------------------
+    # Inter-quartile timing spread (IQR) — jitter-outlier qualifier.
+    # ------------------------------------------------------------------
+    #
+    # IQR (P75 - P25) of the inter-arrival gaps is the spread of the MIDDLE
+    # 50% of intervals, discarding the outer quartiles. On a long-lived C2
+    # session an operator waking the beacon to run a command injects a few
+    # very long gaps (and network stalls a few very short ones); those sit in
+    # the outer quartiles and so leave the IQR untouched. A tight IQR
+    # therefore tells us the CORE cadence is mechanical even when the overall
+    # jitter ratio looks high because of a handful of sleep outliers.
+    #
+    # This is used as a QUALIFIER, not a new confidence axis (the jitter
+    # ratio already scores regularity, and MAD is already outlier-robust —
+    # so adding IQR as another additive regularity bonus would double-count).
+    # Its jobs are:
+    #   * FORENSIC: report the absolute middle-50% spread (iqr=) in every
+    #     beacon alert so an analyst can see the core cadence directly.
+    #   * CONFIRMATION: when a beacon is in the JITTERED tier, a tight IQR
+    #     confirms the jitter is OUTLIER-DRIVEN (real beacon + a few sleeps)
+    #     rather than genuine irregularity, earning a small confirmation
+    #     bonus. A jittered beacon whose middle 50% is ALSO loose gets
+    #     nothing here — that is what genuine chaos looks like.
+
+    option iqr_qualifier_enabled: bool = T;
+
+    # Minimum interval samples before IQR is trusted (quartiles need a
+    # reasonable number of points to be stable).
+    option iqr_min_samples: count = 10;
+
+    # Absolute IQR (seconds) at/below which the middle-50% cadence is
+    # considered mechanically tight. 0.5s follows the source guidance: the
+    # core of a machine beacon barely moves, so half a second of spread in
+    # the central bulk is comfortably mechanical.
+    option iqr_tight_seconds: double = 0.5;
+
+    # Confirmation bonus when a JITTERED-tier beacon has a tight IQR (the
+    # outlier-driven-jitter case). Small and additive — a confirmation, not a
+    # detector. Never applied to tight-tier beacons (already confirmed by the
+    # jitter ratio) or chaotic ones (correctly excluded).
+    option iqr_jittered_confirm_bonus: double = 0.10;
+
+
 
     # Connections closer than this are collapsed into one "burst".
     option beacon_burst_collapse: interval = 1sec;
