@@ -293,6 +293,27 @@ an alert:
   confirmations rather than looser detection. Reported always as `iat_ent=`
   in the alert details.
 
+- **Lag-1 autocorrelation — patterned-sleep (period-2) evasion.** A patterned
+  sleep (short, long, short, long…) is a deliberate evasion: it inflates
+  MAD/variance so the flow reads as irregular, while being perfectly
+  mechanical. Jitter tiers, MAD and entropy are all blind to it — they see
+  high spread and nothing more. Lag-1 autocorrelation (`r1`) sees the hidden
+  order: a period-2 alternation drives `r1` toward −1, whereas random jitter
+  and plain constant beacons both sit near 0. Only **strong-negative** `r1`
+  (≤ `autocorr_strong_negative`, −0.5) is treated as a signal; a positive
+  `r1` (a slowly creeping/trending sleep) is deliberately ignored, since drift
+  is as often benign as not. It is a **contributor, never a decider**: a small
+  confidence bonus and the `patterned_sleep_cadence` indicator on a beacon
+  that reaches scoring, never a standalone alert. Its more important role is to
+  **prevent premature abandonment** — a strong alternating pattern can push
+  jitter past the chaotic-abandonment threshold (which would delete the flow's
+  state before it is ever scored), so when `r1` shows genuine period-2
+  structure the flow is kept and allowed to build suspicion over time. Keeping
+  state cannot itself raise an alert (the flow still faces every normal gate),
+  so this is false-positive-safe. Reported as `r1=` in the alert details. Note
+  this is specifically a *period-2* detector — longer-period patterns are out
+  of scope.
+
 - **Payload-staging / stage transition.** Inside an **already-confirmed** C2,
   a large **download** burst (server→client) whose size is consistent with an
   executable/payload — either above an absolute floor
