@@ -40,9 +40,6 @@ PIKABOT (https://malware-traffic-analysis.net/2024/02/08/index.html)
 TRICKBOT (https://malware-traffic-analysis.net/2020/02/26/index.html)
 <img width="1757" height="232" alt="image" src="https://github.com/user-attachments/assets/7fabc663-f8c1-4d45-a959-1caba488583f" />
 
-COBALTSTRIKE https://malware-traffic-analysis.net/2022/02/07/index.html
-<img width="2296" height="62" alt="image" src="https://github.com/user-attachments/assets/69381826-c596-4688-bf8b-78c0899b7cff" />
-
 ICEDID (https://malware-traffic-analysis.net/2023/10/18/index.html)
 <img width="1759" height="298" alt="image" src="https://github.com/user-attachments/assets/6e1bd5d8-ed25-45e3-94dc-6bc3fbd7307d" />
 
