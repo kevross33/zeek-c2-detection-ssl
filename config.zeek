@@ -338,6 +338,55 @@ export {
     # (low-entropy) timing. Small and additive — corroboration, not a detector.
     option iat_entropy_bonus: double = 0.08;
 
+    # ------------------------------------------------------------------
+    # Lag-1 autocorrelation — patterned-sleep (period-2) evasion.
+    # ------------------------------------------------------------------
+    #
+    # A patterned sleep (short,long,short,long...) is a known evasion: it
+    # inflates MAD/variance so the flow reads as "irregular", while being
+    # perfectly mechanical. Jitter tiers, MAD and entropy are all blind to it
+    # — they see high spread and nothing more. Lag-1 autocorrelation (r1) sees
+    # the hidden order: a period-2 alternation drives r1 toward -1, whereas
+    # random jitter and plain constant beacons both sit near 0.
+    #
+    # This matters for the threat model this package is built against
+    # (ransomware crews and APTs against healthcare, evasive Sliver / custom
+    # loaders seen in red-team and real intrusions), where such profiles do
+    # occur. But it is a NARROW, period-2-specific signal, so it is applied
+    # with maximum caution:
+    #
+    #   * Only STRONG-NEGATIVE r1 counts (<= autocorr_strong_negative). A
+    #     positive r1 (trending/creeping sleeps) is IGNORED — slow drift is as
+    #     often benign as not, and rewarding it would risk false positives.
+    #   * It is a CONTRIBUTOR, never a decider. It adds a small confidence
+    #     bonus within the normal scoring path; it never raises a standalone
+    #     alert and never crosses the alert threshold on its own.
+    #   * Its more important job is to PREVENT PREMATURE ABANDONMENT: a strong
+    #     alternating pattern can push jitter past the chaotic-abandonment
+    #     threshold, which would delete the flow's state before it can ever be
+    #     scored. When r1 shows genuine period-2 structure we keep tracking the
+    #     flow so its suspiciousness can build OVER TIME, rather than dropping
+    #     it as "chaos". Keeping state cannot itself cause an alert — the flow
+    #     still has to pass every normal gate — so this is false-positive-safe.
+
+    option autocorr_enabled: bool = T;
+
+    # Minimum interval samples before r1 is trusted. Autocorrelation needs a
+    # reasonable run of intervals to be meaningful, so this is set high — the
+    # signal only applies to well-established flows, never emerging ones.
+    option autocorr_min_samples: count = 16;
+
+    # r1 at/below which the timing is treated as strongly alternating
+    # (period-2). -0.5 is a conservative floor: clean alternation sits near
+    # -0.9+, so -0.5 requires clear structure while tolerating light jitter on
+    # top of the pattern.
+    option autocorr_strong_negative: double = -0.5;
+
+    # Confirmation bonus when a scored beacon also shows strong period-2
+    # structure. Small and additive — corroboration, not a detector.
+    option autocorr_bonus: double = 0.08;
+
+
 
 
 
