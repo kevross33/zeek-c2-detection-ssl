@@ -331,6 +331,7 @@ export {
     global bowley_skewness: function(v: vector of double): double;
     global quantile_sorted: function(s: vector of double, q: double): double;
     global iqr_spread: function(v: vector of double): double;
+    global iat_entropy: function(gaps: vector of double, bin_frac: double): double;
     global mode_count: function(v: vector of count): count;
     global peak_density: function(v: vector of count): double;
     global median_count: function(v: vector of count): count;
@@ -675,6 +676,63 @@ function bowley_skewness(v: vector of double): double
     if ( sk > 1.0 )  sk = 1.0;
     if ( sk < -1.0 ) sk = -1.0;
     return sk;
+    }
+
+# iat_entropy — Shannon entropy (in bits) of inter-arrival times, using
+# RELATIVE binning. Measures the PREDICTABILITY of the timing: a low value
+# means a few time-buckets dominate (a scheduler firing on a cadence); a high
+# value means the gaps are spread unpredictably (human/app traffic).
+#
+# BINNING IS EVERYTHING, and it must be RELATIVE, not absolute. The bin width
+# is a fraction of the MEDIAN gap (bin_frac * median), so the measure is
+# SCALE-INVARIANT: a 5-second beacon and a 3600-second beacon with the same
+# proportional jitter yield the same entropy. A fixed absolute bin cannot do
+# this — it would read a fast beacon as perfectly regular and an identically
+# jittered slow beacon as pure chaos, which is exactly the trap this avoids.
+#
+# H = -Σ p_i * log2(p_i) over the occupied bins, where p_i is the fraction of
+# gaps that fall in bin i. Zeek has ln() but not log2, so log2(x)=ln(x)/ln(2).
+#
+# This is used ONLY as a confirmation signal (see entropy_* in config.zeek):
+# a clearly-low entropy CONFIRMS a beacon is predictable; a high entropy earns
+# NOTHING (never a penalty, never a gate), so a conservative threshold cannot
+# cause false negatives in the detector — only fewer confirmations.
+#
+# Returns a high sentinel (999.0) for fewer than the minimum samples or a
+# degenerate median, so callers treat "no evidence" as "not predictable" and
+# simply decline to confirm.
+function iat_entropy(gaps: vector of double, bin_frac: double): double
+    {
+    local n = |gaps|;
+    if ( n < 8 || bin_frac <= 0.0 )
+        return 999.0;
+    local med = median(gaps);
+    if ( med <= 0.0 )
+        return 999.0;
+    local binsize = med * bin_frac;
+    if ( binsize <= 0.0 )
+        return 999.0;
+
+    # Bucket the gaps into relative bins and count occupancy.
+    local counts: table[count] of count = table();
+    local i = 0;
+    while ( i < n )
+        {
+        local b = double_to_count(floor(gaps[i] / binsize + 0.5));
+        if ( b !in counts ) counts[b] = 0;
+        counts[b] += 1;
+        ++i;
+        }
+
+    local ln2 = ln(2.0);
+    local h = 0.0;
+    for ( k, cnt in counts )
+        {
+        local p = (cnt + 0.0) / (n + 0.0);
+        if ( p > 0.0 )
+            h += p * (ln(p) / ln2);
+        }
+    return -h;
     }
 
 function mode_count(v: vector of count): count
