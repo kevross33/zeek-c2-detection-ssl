@@ -6,5 +6,7 @@ test_command = cd testing && btest -d tests
 depends =
     zeek >=7.0.0
 suggests =
+    zeek/micrictor/spl-spt
     zeek/corelight/zeek-long-connections
     zeek/foxio/ja4
+    zeek/salesforce/ja3
