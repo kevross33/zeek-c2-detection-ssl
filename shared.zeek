@@ -331,6 +331,7 @@ export {
     global bowley_skewness: function(v: vector of double): double;
     global quantile_sorted: function(s: vector of double, q: double): double;
     global mode_count: function(v: vector of count): count;
+    global peak_density: function(v: vector of count): double;
     global median_count: function(v: vector of count): count;
     global sum_count: function(v: vector of count): count;
     global variance_double: function(v: vector of double,
@@ -665,6 +666,33 @@ function mode_count(v: vector of count): count
     for ( k, cnt in freq )
         if ( cnt > best_n ) { best = k; best_n = cnt; }
     return best;
+    }
+
+# Peak Density Ratio — how DOMINANT the most common size is, as a fraction of
+# all samples (max_count / total). This upgrades the bare mode (which only
+# says WHICH size is most common) into a measure of HOW concentrated the size
+# distribution is. Rationale: attackers jitter TIMING freely, but an idle C2
+# check-in is inherently a fixed size, so a high peak density (e.g. >= 0.80)
+# is a strong "mechanical heartbeat" signal that survives timing evasion —
+# it rescues a beacon whose jitter has pushed it just past the timing gate.
+# Returns 0.0 for an empty window. O(n), same single pass as mode_count.
+function peak_density(v: vector of count): double
+    {
+    local n = |v|;
+    if ( n == 0 )
+        return 0.0;
+    local freq: table[count] of count = table();
+    local i = 0;
+    while ( i < n )
+        {
+        if ( v[i] !in freq ) freq[v[i]] = 0;
+        freq[v[i]] += 1;
+        ++i;
+        }
+    local best_n: count = 0;
+    for ( k, cnt in freq )
+        if ( cnt > best_n ) best_n = cnt;
+    return (best_n + 0.0) / (n + 0.0);
     }
 
 function sum_count(v: vector of count): count
