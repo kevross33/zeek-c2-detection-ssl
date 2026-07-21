@@ -50,7 +50,8 @@ SLIVER Tunnelled through Ligolo-ng (https://www.activecountermeasures.com/malwar
 <img width="1754" height="233" alt="image" src="https://github.com/user-attachments/assets/9bbdef34-7410-4fff-a7ab-fc3274bb93e5" />
 
 Custom Go-based C2 (Numinon) (https://www.activecountermeasures.com/malware-of-the-day-multi-modal-c2-communication-numinon-c2/)
-<img width="1753" height="1134" alt="image" src="https://github.com/user-attachments/assets/da67777e-8757-460c-a5b2-f203dbb4931b" />
+<img width="1755" height="1129" alt="image" src="https://github.com/user-attachments/assets/2462225f-03b7-4666-a1ef-609c5a84cbea" />
+
 
 ## What it detects
 
