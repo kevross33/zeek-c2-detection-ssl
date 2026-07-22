@@ -1366,6 +1366,20 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
 
     local det_cat = is_pinned ? SSL_RESUMPTION_PINNED_BEACON : SSL_PERIODIC_BEACON;
 
+    # Record the beacon (quiet) phase in the lifecycle memory, and apply the
+    # transition bonus if this channel also showed a reverse-flow phase at some
+    # point — the "reverse-flow hello/tasking then quiet beacon" (or the
+    # reverse) intrusion lifecycle. Recorded on a confirmed beacon only.
+    if ( lifecycle_transition_enabled )
+        {
+        note_channel_phase(k$orig, k$dest_id, CHANNEL_PHASE_BEACON);
+        if ( channel_has_transition(k$orig, k$dest_id) )
+            {
+            conf += lifecycle_transition_bonus;
+            add indicators["c2_lifecycle_transition"];
+            }
+        }
+
     # Build the forensic payload-burst detail: each recorded burst as
     # "<size>@<secs-in>", plus a rollup for any beyond the cap.
     local payload_detail = "";
@@ -1646,12 +1660,9 @@ function evaluate_tunnel(c: connection)
     # Shape 1 — long-lived idle keep-alive. The socket is held open for
     # hours but almost nothing moves: an interactive shell waiting for the
     # operator. Very low throughput over a very long duration.
-    if ( dur >= interval_to_double(shell_idle_min_duration) &&
-         bps <= shell_idle_max_bps )
-        {
-        conf += 0.20;
-        add indicators["long_lived_idle_shell"];
-        }
+    local shape_idle_shell =
+        dur >= interval_to_double(shell_idle_min_duration) &&
+        bps <= shell_idle_max_bps;
 
     # Shape 2 — reverse asymmetry. Normal web is small-request / big-response
     # (negative PCR). An interactive reverse-shell inverts this: the client
@@ -1666,16 +1677,84 @@ function evaluate_tunnel(c: connection)
     # shell is LOW-AND-SLOW (keystroke-paced), so its throughput is low. We
     # therefore additionally require the flow to be low-rate (bps within the
     # idle-shell envelope) — a fast upload stream is rejected here.
-    if ( dur >= interval_to_double(shell_asym_min_duration) &&
-         resp_b <= shell_asym_max_inbound_bytes &&
-         orig_b >= shell_asym_min_outbound_bytes &&
-         orig_b >= resp_b &&
-         ( ! reject_immediate_upload ||
-           orig_b < immediate_upload_min_bytes ||
-           bps <= shell_idle_max_bps ) )
+    local shape_asym_shell =
+        dur >= interval_to_double(shell_asym_min_duration) &&
+        resp_b <= shell_asym_max_inbound_bytes &&
+        orig_b >= shell_asym_min_outbound_bytes &&
+        orig_b >= resp_b &&
+        ( ! reject_immediate_upload ||
+          orig_b < immediate_upload_min_bytes ||
+          bps <= shell_idle_max_bps );
+
+    # A shell BYTE SHAPE alone is indistinguishable from a benign endpoint
+    # agent phoning home (endpoint-protection / monitoring telemetry): a
+    # steady, low-rate, small-packet, upload-dominant channel under a valid
+    # commercial certificate. So the shell shapes only CONTRIBUTE CONFIDENCE
+    # when the flow independently looks like C2 — otherwise they are recorded
+    # as indicators (for the lifecycle-phase memory and analyst visibility) but
+    # add no score, which is what stops quiet telemetry saturating to an alert.
+    local shell_shaped = shape_idle_shell || shape_asym_shell;
+
+    local t_dest_id = dest_identity_for(sni, c$id$resp_h, via_proxy);
+
+    # Record the reverse-flow phase for the lifecycle memory as soon as a shell
+    # shape is seen (independent of whether it scores), so a later quiet phase
+    # — or an earlier one — completes the transition.
+    if ( lifecycle_transition_enabled && shell_shaped )
+        note_channel_phase(c$id$orig_h, t_dest_id, CHANNEL_PHASE_REVERSE);
+
+    local has_transition = lifecycle_transition_enabled &&
+                           channel_has_transition(c$id$orig_h, t_dest_id);
+
+    # C2 corroboration: does this flow independently look like C2, beyond the
+    # bare quiet-upload shape?
+    local intel_desc = intel_hit_for_dest(c$id$resp_h);
+    if ( intel_desc == "" && sni != "" && sni != "(empty)" )
+        intel_desc = intel_hit_for_domain(sni);
+    local rat_corroborated =
+        ( "suspect_issuer" in indicators ) ||
+        ( "bad_cert_validation" in indicators ) ||
+        ( "cert_sni_mismatch" in indicators ) ||
+        ( intel_desc != "" ) ||
+        ( "rare_fingerprint_pivot" in indicators ) ||
+        has_transition ||
+        is_host_compromised(c$id$orig_h) ||
+        is_tracked_c2_fingerprint(
+            (c?$ssl && c$ssl?$ja3) ? c$ssl$ja3 : "",
+            (c?$ssl && c$ssl?$ja4) ? c$ssl$ja4 : "",
+            c$id$orig_h);
+    if ( intel_desc != "" )
+        add indicators[fmt("intel_hit:%s", intel_desc)];
+
+    # A valid, matching commercial certificate with an HTTPS-looking inner
+    # protocol is positive evidence of a benign service — disqualifying, UNLESS
+    # this channel has shown a genuine lifecycle transition. Telemetry shows one
+    # steady shape forever and can never accumulate both a quiet and a
+    # reverse-flow phase, so a real transition outweighs the valid cert (real
+    # C2 can and does use valid certs — Let's Encrypt on attacker infra,
+    # domain fronting).
+    local looks_benign_https =
+        ( "valid_cert_match" in indicators ) && ( inner == INNER_LIKELY_HTTPS );
+
+    local shell_scores = shell_shaped &&
+        ( ! reverse_rat_require_corroboration ||
+          ( rat_corroborated && ( has_transition || ! looks_benign_https ) ) );
+
+    if ( shape_idle_shell )
         {
-        conf += 0.25;
+        if ( shell_scores ) conf += 0.20;
+        add indicators["long_lived_idle_shell"];
+        }
+    if ( shape_asym_shell )
+        {
+        if ( shell_scores ) conf += 0.25;
         add indicators["reverse_asymmetry_shell"];
+        }
+
+    if ( has_transition )
+        {
+        conf += lifecycle_transition_bonus;
+        add indicators["c2_lifecycle_transition"];
         }
 
     if ( conf < alert_confidence ) return;
@@ -1699,11 +1778,19 @@ function evaluate_tunnel(c: connection)
                 ? SSL_TUNNEL_INSIDE_TLS
                 : SSL_TUNNEL_KEEPALIVE;
 
-    # An interactive-shell shape is semantically a server-driven RAT, not a
-    # passive keep-alive tunnel — report it as such so the SOC sees the
-    # correct behaviour class.
-    if ( "reverse_asymmetry_shell" in indicators ||
-         "long_lived_idle_shell" in indicators )
+    # Record the quiet (tunnel) phase for the lifecycle memory when this flow
+    # is NOT shell-shaped (the reverse phase was already recorded above). This
+    # lets an earlier or later reverse-flow phase on the same channel complete
+    # the transition.
+    if ( lifecycle_transition_enabled && ! shell_shaped )
+        note_channel_phase(c$id$orig_h, t_dest_id, CHANNEL_PHASE_TUNNEL);
+
+    # Report an interactive-shell shape as a server-driven RAT rather than a
+    # passive keep-alive — but only when it actually scored as C2 (the
+    # corroboration gate above). An uncorroborated quiet-upload shape (benign
+    # telemetry) stays a plain keep-alive category and, having earned no shell
+    # confidence, will typically fall below the alert threshold anyway.
+    if ( shell_shaped && shell_scores )
         det_cat = SSL_REVERSE_FLOW_RAT;
 
     local details = fmt(
@@ -1873,6 +1960,20 @@ function evaluate_reverse_flow(c: connection)
         {
         conf += 0.20;
         add indicators["prior_beacon_history"];
+        }
+
+    # Record the reverse-flow phase in the lifecycle memory and apply the
+    # transition bonus if this channel also showed a quiet (beacon/tunnel)
+    # phase — the same intrusion lifecycle the tunnel path tracks, seen from
+    # the SPL-based reverse-flow side.
+    if ( lifecycle_transition_enabled )
+        {
+        note_channel_phase(c$id$orig_h, dest_id, CHANNEL_PHASE_REVERSE);
+        if ( channel_has_transition(c$id$orig_h, dest_id) )
+            {
+            conf += lifecycle_transition_bonus;
+            add indicators["c2_lifecycle_transition"];
+            }
         }
 
     # Upload very dominance and silence length are now weak supporting
