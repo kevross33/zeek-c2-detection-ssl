@@ -314,6 +314,37 @@ an alert:
   this is specifically a *period-2* detector — longer-period patterns are out
   of scope.
 
+- **Reverse-flow RAT corroboration + C2 lifecycle transition.** An
+  interactive-shell *byte shape* (quiet, low-rate, upload-dominant, tiny
+  inbound, held open for a long time) is, on its own, indistinguishable from a
+  benign endpoint agent phoning home — endpoint-protection or monitoring
+  telemetry uploading steadily to a cloud endpoint under a valid commercial
+  certificate. Labelling those `SSL_REVERSE_FLOW_RAT` on shape alone is the
+  dominant reverse-flow false positive. So the shell shapes now only
+  **contribute confidence and earn the RAT label when the flow independently
+  looks like C2** — at least one of: a suspect/self-signed/invalid
+  certificate, a cert/SNI mismatch, a threat-intel hit, a tracked-C2
+  fingerprint, the host already being compromised, or a lifecycle transition
+  (below). A valid, matching commercial certificate with an HTTPS-looking
+  inner protocol is treated as disqualifying context. An uncorroborated
+  quiet-upload shape is still recorded as an indicator (for visibility and
+  phase memory) but adds no score.
+
+  On top of that, the package tracks a **C2 lifecycle transition**. A real C2
+  channel changes behaviour over its life on one host→destination: an initial
+  reverse-flow burst (hello / machine- and network-recon / tasking) that goes
+  quiet into a beacon or tunnel waiting for instructions — or the reverse, an
+  established beacon/tunnel that later turns into reverse-flow
+  (hands-on-keyboard, operator tasking, next-stage payload push). This is the
+  backdoor-then-hands-on pattern seen in ransomware intrusions and APT
+  footholds. Seeing **both** a quiet (beacon/tunnel) phase and a reverse-flow
+  phase on one channel — in **either order** — is a strong, specific signal
+  that single-shape benign traffic never produces, and it both counts as a
+  corroborator and earns a confidence bonus (`c2_lifecycle_transition`). A
+  genuine transition even overrides the valid-cert disqualifier, since
+  telemetry can never accumulate two distinct phases. The phase memory decays,
+  so unrelated later activity to the same destination does not falsely chain.
+
 - **Payload-staging / stage transition.** Inside an **already-confirmed** C2,
   a large **download** burst (server→client) whose size is consistent with an
   executable/payload — either above an absolute floor
