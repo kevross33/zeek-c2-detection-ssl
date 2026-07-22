@@ -1092,6 +1092,53 @@ export {
     option shell_base_confidence: double = 0.55;
 
     # ------------------------------------------------------------------
+    # Reverse-flow RAT corroboration gate + lifecycle transition.
+    # ------------------------------------------------------------------
+    #
+    # An interactive-shell BYTE SHAPE (quiet, low-rate, upload-dominant, tiny
+    # inbound) is, on its own, indistinguishable from a benign endpoint-agent
+    # phoning home (endpoint protection telemetry, monitoring agents) — steady
+    # low-rate small-packet uploads to a cloud endpoint under a valid
+    # commercial certificate. Labelling those SSL_REVERSE_FLOW_RAT on shape
+    # alone is the dominant reverse-flow false positive.
+    #
+    # So the RAT label now requires the flow to independently look like C2,
+    # not just like a quiet upload. When enabled, an interactive-shell shape is
+    # only reported as SSL_REVERSE_FLOW_RAT if at least one genuine C2
+    # corroborator is also present:
+    #   * prior beacon/tunnel history on this orig->dest channel,
+    #   * a suspect or self-signed / invalid certificate,
+    #   * a tracked-C2-fingerprint pivot,
+    #   * a threat-intel hit on the destination,
+    #   * the host already being in compromised state, or
+    #   * a lifecycle transition (see below).
+    # A flow with a VALID, matching commercial certificate and an
+    # HTTPS-looking inner protocol is treated as disqualifying context — it is
+    # not a RAT — and falls back to the ordinary tunnel keep-alive category (or
+    # nothing) rather than the RAT label.
+
+    option reverse_rat_require_corroboration: bool = T;
+
+    # ------------------------------------------------------------------
+    # A C2 channel changes behaviour over its life: an initial reverse-flow
+    # burst (hello / recon / tasking) that goes quiet into a beacon/tunnel, OR
+    # an established beacon/tunnel that later turns into reverse-flow
+    # (hands-on-keyboard, tasking, payload push). Seeing BOTH phases on one
+    # orig->dest channel — in either order — is a strong, specific C2 signal
+    # that benign single-shape traffic never produces. This is tracked in the
+    # channel-phase memory (see shared.zeek) and both counts as a corroborator
+    # for the gate above and earns a confidence bonus.
+
+    option lifecycle_transition_enabled: bool = T;
+
+    # Confidence bonus when a detection occurs on a channel that has shown both
+    # a quiet (beacon/tunnel) phase and a reverse-flow phase. Substantial,
+    # because the multi-phase lifecycle is highly specific to real C2 — but
+    # still a bonus on an already-scored detection, not a standalone trigger.
+    option lifecycle_transition_bonus: double = 0.25;
+
+
+    # ------------------------------------------------------------------
     # Trusted-pivot detector.
     # ------------------------------------------------------------------
 
