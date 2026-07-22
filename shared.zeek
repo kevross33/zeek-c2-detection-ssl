@@ -489,6 +489,52 @@ export {
     global is_payload_staged: function(host: addr): bool;
 
     # ------------------------------------------------------------------
+    # Channel-phase memory (C2 lifecycle transition detection).
+    # ------------------------------------------------------------------
+    # A real C2 channel changes BEHAVIOUR over its life on the same
+    # host->destination: an initial reverse-flow burst (hello / machine &
+    # network recon / tasking) that then goes QUIET into a beacon or tunnel
+    # waiting for instructions — or the reverse, an established beacon/tunnel
+    # that later transitions into reverse-flow (hands-on-keyboard, operator
+    # tasking, next-stage payload push). Both orderings are the same intrusion
+    # lifecycle, and seeing BOTH phases on one channel is a far stronger and
+    # more specific signal than either shape alone.
+    #
+    # Benign traffic that mimics one shape (telemetry agents look like a quiet
+    # keep-alive; a backup looks like an upload) shows only ONE steady shape
+    # for its whole life, so it never accumulates two distinct phases and never
+    # earns the transition signal. That is what makes this both a strong
+    # detector and false-positive-safe.
+    #
+    # Keyed by "orig|dest_id". Records which phases have been seen and which
+    # came first, with a decaying lifetime so unrelated later activity to the
+    # same dest doesn't falsely chain.
+    type ChannelMemory: record {
+        seen_beacon:  bool &default = F;   # periodic-beacon phase observed
+        seen_tunnel:  bool &default = F;   # keep-alive/tunnel phase observed
+        seen_reverse: bool &default = F;   # reverse-flow / tasking phase observed
+        first_phase:  string &default = "";
+        last_seen:    time &default = double_to_time(0);
+    };
+    global channel_phases: table[string] of ChannelMemory
+        &write_expire = 12hr;
+
+    # Phase constants for note_channel_phase.
+    const CHANNEL_PHASE_BEACON  = "beacon";
+    const CHANNEL_PHASE_TUNNEL  = "tunnel";
+    const CHANNEL_PHASE_REVERSE = "reverse";
+
+    # Record that a given behavioural phase was observed on the orig->dest
+    # channel. Returns the (possibly updated) ChannelMemory.
+    global note_channel_phase: function(orig: addr, dest_id: string,
+                                        phase: string): ChannelMemory;
+
+    # True if this channel has shown BOTH a quiet phase (beacon or tunnel) AND
+    # a reverse-flow phase over its lifetime — the lifecycle transition, in
+    # either order.
+    global channel_has_transition: function(orig: addr, dest_id: string): bool;
+
+    # ------------------------------------------------------------------
     # Threat-intel corroboration state.
     # ------------------------------------------------------------------
     # Intel-framework hits (from the operator's own Intel feeds, written to
@@ -1328,6 +1374,42 @@ function is_payload_staged(host: addr): bool
         return F;
         }
     return T;
+    }
+
+function note_channel_phase(orig: addr, dest_id: string,
+                            phase: string): ChannelMemory
+    {
+    local key = fmt("%s|%s", orig, dest_id);
+    local mem: ChannelMemory;
+    if ( key in channel_phases )
+        mem = channel_phases[key];
+    else
+        mem = ChannelMemory();
+
+    if ( mem$first_phase == "" )
+        mem$first_phase = phase;
+
+    if ( phase == CHANNEL_PHASE_BEACON )
+        mem$seen_beacon = T;
+    else if ( phase == CHANNEL_PHASE_TUNNEL )
+        mem$seen_tunnel = T;
+    else if ( phase == CHANNEL_PHASE_REVERSE )
+        mem$seen_reverse = T;
+
+    mem$last_seen = network_time();
+    channel_phases[key] = mem;
+    return mem;
+    }
+
+function channel_has_transition(orig: addr, dest_id: string): bool
+    {
+    local key = fmt("%s|%s", orig, dest_id);
+    if ( key !in channel_phases )
+        return F;
+    local mem = channel_phases[key];
+    # A lifecycle transition = a quiet phase (beacon OR tunnel) AND a
+    # reverse-flow phase both observed on this channel, in either order.
+    return ( mem$seen_beacon || mem$seen_tunnel ) && mem$seen_reverse;
     }
 
 # ----------------------------------------------------------------------
