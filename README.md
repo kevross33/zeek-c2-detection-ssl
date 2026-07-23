@@ -505,7 +505,121 @@ Key fields beyond the standard ts/orig_h/resp_h:
 | `ja3s` / `ja4s` | Server fingerprints (blanked when `via_proxy=T`) |
 | `pcr` | Producer-consumer ratio: -1 = pure download, +1 = pure upload |
 | `sample_uid` | Representative uid for pivoting into ssl/conn/x509 |
-| `indicators` | Set of signal tags: `suspect_issuer`, `no_sni`, `rare_ja3_to_raw_ip`, etc. |
+| `indicators` | Set of signal tags explaining *why* this fired — see [Indicator reference](#indicator-reference) |
+
+## Indicator reference
+
+Every alert carries an `indicators` set explaining which signals contributed.
+Most **raise** confidence; a few **lower** it (marked ▼) and are listed so you
+can see what the detector weighed *against* firing — an alert that fired despite
+suppressors is usually more interesting, not less. A handful are neutral tags
+(marked ●) that describe character without moving the score.
+
+**Timing / cadence**
+
+| Indicator | Meaning |
+|---|---|
+| `symmetric_timing` | Inter-arrival gaps are symmetrically distributed (Bowley skew ≈ 0) — a scheduler, not human-driven traffic |
+| `asymmetric_timing` ▼ | Strongly lopsided gap distribution on an unpinned flow — uncharacteristic of a machine beacon |
+| `predictable_timing` | Low Shannon entropy of inter-arrival times: the gaps concentrate in a few relative buckets, i.e. a mechanical cadence |
+| `proportionate_cadence` | The middle 50% of intervals (IQR) is tight relative to the interval — a jittered beacon whose jitter is bounded, not chaotic |
+| `patterned_sleep_cadence` | Strong negative lag-1 autocorrelation: an alternating short/long sleep pattern, a deliberate evasion that inflates jitter while staying mechanical |
+| `jittered_beacon` ● | Cadence sits in the jittered tier (jitter above the tight threshold but still beacon-like) |
+| `uniform_keepalive_cadence` | Packet timing inside a long-lived tunnel is machine-uniform |
+| `very_slow_cadence` ● | Very low packet rate — tagged for visibility, not disqualifying (persistent C2 can be slow) |
+| `long_silence` | A long mid-flow silent gap, consistent with waiting for an operator command |
+| `mid_flow_silence_then_burst` ● | The reverse-tasking rhythm: idle → small inbound (command) → larger outbound (result) |
+
+**Payload / size shape**
+
+| Indicator | Meaning |
+|---|---|
+| `fixed_size_heartbeat` | One response size dominates the window — a fixed-size idle check-in, which timing jitter cannot disguise |
+| `fixed_size_heartbeat_jittered` | Same, but on a jittered-tier beacon — the size regularity betrays a beacon whose timing was evasive |
+| `tiny_avg_pkt` | Very small average packet size, typical of control traffic rather than content |
+| `very_low_bps` | Very low throughput for the connection's lifetime |
+| `high_throughput_session` ● | High throughput — tagged for context |
+| `server_payload_bursts` | Repeated server→client bursts, consistent with tasking |
+| `client_upload_bursts` | Repeated client→server bursts, consistent with staged exfil |
+| `payload_download_burst` | A distinct download burst inside a confirmed C2 channel — likely next-stage payload delivery |
+| `stage_transition` | This host received a payload burst on another channel shortly before this one confirmed — a stage-to-new-C2 handover |
+| `upload_dominant_pcr` ● | Producer-consumer ratio shows the client sending more than it receives |
+| `extreme_upload_ratio` | Outbound exceeds inbound by a large multiple |
+| `tiny_uniform_packets` ● | Packets are very small and very uniform — a heartbeat/keep-alive shape |
+| `fixed_frame_inner_protocol` ● | Tight size distribution with low max/median ratio: fixed framing inside the tunnel (SSH-, RDP-, hVNC- or TLS-over-TLS all look like this) |
+| `binary_burst_inner_protocol` ● | Irregular large bursts inside the tunnel, consistent with binary file transfer |
+| `bulk_payload_shape` ▼ | Byte pattern looks like bulk transfer rather than C2 |
+| `pure_download_flow` ▼ | Almost entirely inbound — looks like content consumption |
+
+**Interactive / reverse-flow**
+
+| Indicator | Meaning |
+|---|---|
+| `long_lived_idle_shell` | Socket held open for a long time with near-zero throughput — an interactive shell waiting for the operator |
+| `reverse_asymmetry_shell` | Client streams output while the server sends only tiny payloads — inverted from normal web, typical of a reverse shell |
+| `c2_lifecycle_transition` | This channel has shown **both** a quiet (beacon/tunnel) phase and a reverse-flow phase — the hello/recon → quiet → hands-on intrusion lifecycle, in either order. Benign single-shape traffic never produces this |
+| `prior_beacon_history` | This originator was already beaconing to this destination — repeated contact, not a one-off upload |
+
+**Certificate / TLS identity**
+
+| Indicator | Meaning |
+|---|---|
+| `suspect_issuer` | Certificate issuer matches a known-suspect or default/self-signed pattern |
+| `bad_cert_validation` | Certificate failed Zeek's validation (self-signed, expired, bad chain) |
+| `cert_sni_mismatch` ● | The certificate does not cover the claimed SNI |
+| `unrooted_cert_chain` | Chain does not reach a trusted root — weak alone, meaningful alongside beaconing |
+| `no_sni` | No SNI sent — common in lower-quality tooling contacting raw IPs |
+| `tls13_no_alpn` | TLS 1.3 with no ALPN — unusual for genuine browser/app traffic |
+| `nonstandard_alpn` | ALPN value is neither HTTP nor a recognised standard protocol |
+| `browser_cipher_no_alpn` | Client mimics a browser cipher suite but never negotiates a web ALPN — imitation without the behaviour |
+| `inner_looks_like_https` ▼ | The tunnelled protocol looks like genuine HTTPS |
+| `web_alpn_observed` ▼ | A real web ALPN (`h2`/`http/1.1`) was negotiated |
+| `valid_cert_match` ▼ | Valid certificate that correctly covers the SNI |
+| `browser_ja4_cipher_set` ▼ | JA4 cipher hash belongs to a known browser TLS engine (e.g. BoringSSL/Chromium) |
+
+**Destination & fingerprint rarity**
+
+| Indicator | Meaning |
+|---|---|
+| `single_client_destination` ● | Exactly one internal host talks to this destination — consistent with dedicated C2, not a shared service |
+| `rare_destination_N_clients` ● | Only N internal hosts contact this destination |
+| `rare_fingerprint_to_raw_ip` | An uncommon client fingerprint connecting to a bare IP with no SNI |
+| `rare_fingerprint_pivot` | This client fingerprint is rare across the estate and appears on a suspicious channel |
+| `rare_ja3_to_trusted_pivot` ● | A rare fingerprint reaching a legitimate-but-abusable platform, where the cert does not validly cover the SNI |
+| `common_fingerprint_to_popular_dest` ▼ | Common fingerprint going to a widely-used destination |
+| `popular_upload_dest` ▼ | Several internal hosts upload to this destination — a shared service |
+| `fanout_N_clients` ▼ | N internal hosts contact this destination — fan-out indicates a shared service, not single-host C2 |
+
+**Host & campaign correlation**
+
+| Indicator | Meaning |
+|---|---|
+| `compromised_host_activity` | This host is already in compromised state from an earlier confirmed detection |
+| `host_c2_escalation` | Escalation marker: this detection sits on a host that is already compromised or showing a rare-fingerprint pivot |
+| `emerging_shape_confirmed` | The flow was flagged early as a pre-beacon shape and has now confirmed as a full beacon |
+| `intel_hit:<source>` | The destination matched an entry in your Intel framework feeds |
+| `session_resumption_pinned` ● | The channel pins TLS session resumption — characteristic of tooling that reuses one session |
+| `via_proxy` / `proxy_intercepted` ● | Connection traversed a configured proxy / was TLS-intercepted; server fingerprints are the proxy's, not the real upstream's |
+
+### Reading the `details` field
+
+The `details` string carries the raw measurements behind those indicators:
+
+| Field | Meaning |
+|---|---|
+| `cnt` | Connections observed in this flow's window |
+| `hb_sz` | Modal ("heartbeat") response size in bytes |
+| `pdens` | Peak density — % of samples sharing that modal size (high = fixed-size heartbeat) |
+| `iqr` | Inter-quartile spread of intervals, in seconds (middle-50% cadence) |
+| `iat_ent` | Inter-arrival-time entropy in bits (low = predictable) |
+| `r1` | Lag-1 autocorrelation (strongly negative = alternating sleep pattern) |
+| `jit` | Jitter: MAD of intervals as a % of the median |
+| `int` | Median interval between connections, in seconds |
+| `tasks` / `exfil` | Count of server-side and client-side payload bursts |
+| `resump` | % of connections using TLS session resumption |
+| `sleeps` | Count of long sleep gaps observed |
+| `payload_bursts` | Recorded download bursts as `<size>@<seconds-into-flow>` |
+| `bps` / `avg_pkt` / `dur` | Throughput, average packet size, and connection duration (tunnel detections) |
 
 ## Inner protocol detection
 
