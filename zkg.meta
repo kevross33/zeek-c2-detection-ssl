@@ -1,12 +1,24 @@
 [package]
-description = C2 detection over SSL/TLS — behavioural beaconing, tunnels, reverse-flow RAT, trusted-pivot abuse. Zeek 7+/8+. It uses a variety of techniques and indicators in order to detect and validate suspicious traffic relying on the behaviour of the flow/s over time rather than single detection relying instead on suspicious and benign indicators to increase or decrease the confidence while discarding general and popular traffic through popularity in a network such as browser traffic where it can flag common shared similar JA4s that indicate common applications without requiring a pre-known JA4 list, discarding commmon fingerprints does not discard flows if they are behaving like C2 however. It uses no per-malware signatures but is capable of detecting a wide variety of backdoors, RATs, tunnellers, RRM tooling etc that use TLS/SSL. Please see readme at https://github.com/kevross33/zeek-c2-detection-ssl for further details.
+description = C2 detection over SSL/TLS — behavioural beaconing, tunnels,
+    reverse-flow RAT, and trusted-pivot abuse detection for Zeek 7+/8+. It
+    detects and confirms suspicious traffic based on the behaviour of a
+    flow over time (timing, jitter, shape, size distribution), rather than
+    on single indicators alone. Suspicious and benign signals raise or
+    lower confidence rather than deciding outcomes outright, and common,
+    popular traffic is discarded through network-wide popularity tracking
+    — for example, browsers sharing a JA4 cipher-hash family are
+    recognised and demoted without needing a pre-known JA4 allowlist.
+    Discarding a common fingerprint does not discard a flow that is
+    otherwise behaving like C2. It uses no per-malware signatures, but is
+    capable of detecting a wide variety of backdoors, RATs, tunnellers,
+    and RMM tooling that uses TLS/SSL. See the README at
+    https://github.com/kevross33/zeek-c2-detection-ssl for full details.
 script_dir = .
 tags = c2, beacon, tls, ssl, anomaly, threat-hunting, proxy
 test_command = cd testing && btest -d tests
 depends =
     zeek >=7.0.0
-suggests =
-    zeek/micrictor/spl-spt
-    zeek/corelight/zeek-long-connections
     zeek/foxio/ja4
     zeek/salesforce/ja3
+    zeek/corelight/zeek-long-connections
+    zeek/micrictor/spl-spt
