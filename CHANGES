@@ -1,0 +1,82 @@
+1.0.0 | 2026-07-28
+
+  Initial public release. Summary of the major capabilities and fixes
+  developed prior to this release (full history in git log).
+
+  Core behavioural detectors
+  * Periodic SSL beaconing detection (full-handshake and session-resumption
+    pinned), with jitter-tier classification (tight / jittered / chaotic)
+    driven by MAD and Bowley skewness.
+  * Long-lived tunnel / keep-alive detection, independent of SNI.
+  * Reverse-flow / interactive-shell (RAT) detection via both SPL-based
+    command-then-result timing and SPL-independent byte-shape heuristics.
+  * Tunnelled-protocol-inside-TLS detection (fixed-frame / binary-burst
+    inner protocols).
+  * Living-off-trusted-sites pivot detection (rare client fingerprint to a
+    popular CDN/platform).
+  * Exfiltration escalation ladder tracking cumulative upload volume on a
+    confirmed C2 channel.
+  * Payload-staging / stage-transition correlation across channels on the
+    same host.
+
+  Statistical confirmation signals (all bounded corroborators layered on
+  top of the behavioural detectors above; none of these create or gate a
+  detection on their own)
+  * Payload-size Peak Density Ratio: rescues a beacon whose timing looks
+    evasive but whose response size is mechanically fixed.
+  * Inter-quartile timing spread (IQR), judged RELATIVE to the interval:
+    confirms bounded/proportionate jitter versus genuine chaos.
+  * Inter-arrival-time entropy (relative-binned Shannon entropy): confirms
+    predictable timing independent of dispersion.
+  * Lag-1 autocorrelation: detects patterned (period-2 alternating)
+    sleeps that inflate jitter while remaining mechanical, and prevents
+    premature abandonment of such flows.
+  * C2 lifecycle transition memory: recognises a channel that has shown
+    BOTH a quiet (beacon/tunnel) phase and a reverse-flow phase, in either
+    order — the hello/recon-then-quiet or established-C2-then-hands-on
+    pattern seen in ransomware backdoors and APT footholds.
+
+  False-positive defences
+  * Fan-out prevalence gating: many internal hosts to one destination is
+    treated as a shared service, not single-host C2.
+  * Immediate-upload rejection: distinguishes a real low-and-slow
+    interactive shell from high-rate media/WebRTC/backup uploads.
+  * Reverse-flow RAT corroboration gate: an interactive-shell byte shape
+    only earns the RAT label and its confidence when the flow
+    independently looks like C2 (suspect/invalid cert, intel hit, tracked
+    fingerprint, compromised host, or a lifecycle transition). A valid
+    commercial certificate with an HTTPS-looking inner protocol no longer
+    causes an endpoint-agent/telemetry flow to be mislabelled as a RAT.
+  * Operator allowlist entries are ABSOLUTE: nothing (including a
+    self-signed or non-matching certificate) can revoke an explicit
+    allowlist match. Domain fronting remains covered via
+    trusted_pivot_suffixes (kept under full analysis) and cert/SNI
+    mismatch scoring, not via revoking the bypass.
+  * JA4-primary fingerprinting with a browser-shape classifier and a
+    cipher-hash learning mechanism, so Chromium/BoringSSL-family clients
+    collapse to one identity regardless of extension-count churn.
+  * Fixed: popular_dests now uses &write_expire (not &create_expire) so an
+    actively-used popular destination stays popular instead of silently
+    expiring and having to re-earn popularity from zero every
+    popular_dest_expiry window.
+  * Fixed: a reporter error that fired once per destination per popularity
+    flip when flow state was indexed after eviction.
+  * Removed the SSL-independent encrypted-tunnel (non-TLS-over-443)
+    detector from this package — it is out of scope for a TLS/SSL-focused
+    detector and belongs in a future dedicated TCP/multi-protocol C2
+    package (logic preserved for that purpose).
+
+  Testing
+  * Added unit test coverage for the statistical confirmation signals
+    (peak density, IQR spread, IAT entropy, lag-1 autocorrelation, Bowley
+    skewness, quantile interpolation).
+  * Added unit test coverage for the C2 lifecycle transition memory,
+    including both phase orderings and negative cases (single repeated
+    phase, unrelated channel).
+  * Added unit test coverage for host-compromise correlation, payload
+    staging, tracked-C2-fingerprint pivot matching, and destination
+    fan-out/popularity tracking (a regression guard for the &write_expire
+    fix above).
+  * Added unit test coverage for the absolute-allowlist behaviour (suffix
+    and apex matching, case-insensitivity) and JA4 browser-shape
+    classification against real Chromium/BoringSSL fingerprints.
