@@ -1,0 +1,8 @@
+h1->d1 after 3x BEACON only: has_transition = F (expect F)
+h2->d1 after TUNNEL only: has_transition = F (expect F)
+h2->d1 after TUNNEL then REVERSE: has_transition = T (expect T)
+h3->d2 after REVERSE only: has_transition = F (expect F)
+h3->d2 after REVERSE then BEACON (reverse-first ordering): has_transition = T (expect T)
+h1->d2 (never touched): has_transition = F (expect F)
+h2->d1 first_phase = tunnel (expect tunnel)
+h3->d2 first_phase = reverse (expect reverse)
