@@ -1,6 +1,6 @@
 # C2 Detection — SSL/TLS module
 
-## Initial notes on detector
+## Notes on SSL/TLS C2 detector
 I APPRECIATE ALL FEEDBACK THAT COULD ENHANCE THIS PACKAGE (Especially decreasing any false negatives/positives or increasing performance further). 
 
 NOTE: While I provided much of the detection logic and extensively tested everything including looking at code, it was written with the assistance of LLMs due to its scale and complexity and to allow the detections to be created at pace. I have tested this both against malicious traffic PCAPs as well as run against large scale enterprise traffic. local-exclusions file will allow you to tune out any local false positives but often they are genuine tunnels of some description even if legitimate and I have not seen a beaconing false positive yet (although it should be assumed there will be). It does attempt to determine rarity to elimate likely legitimate traffic as early as possible (mostly if it sees other hosts using same fingerprints, destinatione etc.). Some of these indicators are not an immediate disqualification of a C2 channel, for example even if the JA4 fingerprint is not rare in the environment will simply not use that as as a negative indicator due to potential false negatives from malware utilising legitimate binaries or fingperprints including faking them.  
@@ -17,8 +17,6 @@ zeek/corelight/zeek-long-connections,
 zeek/salesforce/ja3,
 zeek/foxio/ja4,
 zeek/micrictor/spl-spt**
-
-The intention is that this will eventually become a zkg installable package. You are free to use this package for testing purposes. Other protocols will then be looked at (namely HTTP, unknown TCP for custom binary protocols and RATs communicating) and SSH tunnels. Other protocols/detections may not be needed, for instance wireguard is already detected via zeek/corelight/zeek-spicy-wireguard (SLIVER and other tooling may use this protocol), ICMP and DNS already have detection packages in place but this may still be looked at if there is any gaps.
 
 ## Package scope
 Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8.
