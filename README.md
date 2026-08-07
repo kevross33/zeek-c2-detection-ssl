@@ -1,5 +1,13 @@
 # C2 Detection — SSL/TLS module
 
+
+***The following zeek packages are required to be installed***
+
+zeek/corelight/zeek-long-connections,
+zeek/salesforce/ja3,
+zeek/foxio/ja4,
+zeek/micrictor/spl-spt
+
 ## Notes on SSL/TLS C2 detector
 I APPRECIATE ALL FEEDBACK THAT COULD ENHANCE THIS PACKAGE (Especially decreasing any false negatives/positives or increasing performance further). 
 
@@ -10,13 +18,6 @@ This ultimately is a work in progress and false negatives will look to be elimin
 It will also attempt to detect other activities over the C2 channel including potential tasking messages but primarily if there is a payload download (assumed by a "payload sized" download burst) as well as if a C2 channel starts exfiltrating data with staged escalation as transfered amounts of data increase.
 
 Another note is it does support definition of web proxies. The correct positioning of a sensor for this between the client and the web proxy so we can see the true client as well as potential fingerprinting. This however is only partially tested at the moment and only client to Internet has been fully tested in network. It exists to provide that detection on what can still be detected on but also to deal with potential false positive skews proxies may introduce if not defined correctly.
-
-**The following zeek packages are required/recommended (JA4 for fingerprinting and spl-spt for packet timing are essential):
-
-zeek/corelight/zeek-long-connections,
-zeek/salesforce/ja3,
-zeek/foxio/ja4,
-zeek/micrictor/spl-spt**
 
 ## Package scope
 Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8.
