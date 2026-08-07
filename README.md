@@ -315,6 +315,22 @@ an alert:
   this is specifically a *period-2* detector — longer-period patterns are out
   of scope.
 
+- **Combined cap on correlated timing confirmations.** Peak density, the IQR
+  qualifier, and IAT entropy are three measurements of the *same* underlying
+  property — "is this timing/size mechanically regular?" — so on a genuine
+  beacon they tend to fire together and partly re-state one fact. Their
+  combined contribution to confidence is therefore capped
+  (`timing_regularity_bonus_cap`, default 0.20) rather than summed without
+  limit, so their correlated stacking cannot saturate the score toward 1.0
+  before the *independent* signals (certificate, intel, host-state, fan-out)
+  have been weighed. The cap is at least as large as any single member bonus,
+  so a beacon that confirmed on one of these still gets its full value — only
+  the redundant stacking is bounded, which keeps the confidence scale
+  meaningful and lets suspicion build progressively rather than pinning to 1.0
+  on timing alone. Lag-1 autocorrelation is excluded from the cap because it
+  measures an orthogonal structure (period-2 alternation) and is genuine
+  independent evidence.
+
 - **Reverse-flow RAT corroboration + C2 lifecycle transition.** An
   interactive-shell *byte shape* (quiet, low-rate, upload-dominant, tiny
   inbound, held open for a long time) is, on its own, indistinguishable from a
@@ -345,6 +361,39 @@ an alert:
   genuine transition even overrides the valid-cert disqualifier, since
   telemetry can never accumulate two distinct phases. The phase memory decays,
   so unrelated later activity to the same destination does not falsely chain.
+
+- **Informational / micro TLS signals.** A set of individually *weak* signals
+  that matter only as stacking context, never as detectors — because modern C2
+  deliberately mimics legitimate clients (correct TLS versions, real ciphers,
+  browser-like ALPN and certificates), any single "simple" or "legacy" tell is
+  exactly what capable tooling fixes to blend in. The value is the
+  *incongruity*: a flow that beacons cleanly should not simultaneously trip
+  several simplicity tells. Each is tagged for analyst visibility; scores are
+  tiny and combination-only, and several add no score at all.
+  - *JA4 client-offering richness* (`sparse_client_offering`) — a sparse
+    ClientHello (few extensions, read straight from the JA4 prefix).
+    **Informational only, zero score by default**, because simple benign
+    software (IoT, medical/lab devices, minimal agents) looks identical to
+    simple malware.
+  - *JA4S server-fingerprint rarity* (`rare_server_fingerprint`,
+    `rare_server_fingerprint_raw_ip`) — the strongest of this group. An
+    attacker can mimic a client fingerprint but not the server's ServerHello
+    unless they control the infrastructure, and C2 servers often run
+    distinctive or minimal TLS stacks. Mild bonus for a rare server
+    fingerprint; a larger one when it is reached at a raw IP with no SNI.
+  - *Deprecated TLS/SSL version* (`deprecated_tls_version`) — TLS 1.1/1.0/SSLv3
+    is odd in 2026, but legacy medical/lab/embedded devices genuinely still use
+    it, so this is a tiny combination-only nudge.
+  - *ECH awareness* (`ech_offered`, `ech_offered_nonbrowser`) — Encrypted
+    Client Hello hides the true SNI. Today it is overwhelmingly a legitimate
+    privacy-browser signal, so ECH from a browser shape is context only (no
+    score); only ECH from a *non-browser* fingerprint — a minimal stack
+    bothering to implement ECH — earns a mild nudge. This also future-proofs
+    the `no_sni` logic, since an ECH flow shows a present-but-generic outer
+    SNI rather than an empty one.
+  - *Certificate structural poverty* (`cert_structurally_poor`) — an empty or
+    degenerate certificate subject (no CN, or an empty CN), sometimes seen on
+    throwaway C2 certs. Mild, combination-only.
 
 - **Payload-staging / stage transition.** Inside an **already-confirmed** C2,
   a large **download** burst (server→client) whose size is consistent with an
@@ -570,6 +619,11 @@ suppressors is usually more interesting, not less. A handful are neutral tags
 | `tls13_no_alpn` | TLS 1.3 with no ALPN — unusual for genuine browser/app traffic |
 | `nonstandard_alpn` | ALPN value is neither HTTP nor a recognised standard protocol |
 | `browser_cipher_no_alpn` | Client mimics a browser cipher suite but never negotiates a web ALPN — imitation without the behaviour |
+| `deprecated_tls_version` | Connection negotiated TLS 1.1/1.0/SSLv3 — odd in 2026, but legacy medical/lab/embedded devices genuinely still do this, so it is a tiny combination-only nudge |
+| `sparse_client_offering` ● | The client's JA4 shows few TLS extensions (a simple/minimal stack). Informational only — simple *benign* software (IoT, medical devices, agents) looks identical to simple malware, so this carries no score by default |
+| `ech_offered` ● | Client offered Encrypted Client Hello (hides the true SNI). Today overwhelmingly a legitimate privacy-browser signal — context only, no score |
+| `ech_offered_nonbrowser` | ECH offered by a non-browser fingerprint — the mildly incongruous case (a minimal stack bothering to implement ECH) |
+| `cert_structurally_poor` | Certificate subject is empty or degenerate (no CN / empty CN) — sometimes seen on throwaway C2 certs; mild, combination-only |
 | `inner_looks_like_https` ▼ | The tunnelled protocol looks like genuine HTTPS |
 | `web_alpn_observed` ▼ | A real web ALPN (`h2`/`http/1.1`) was negotiated |
 | `valid_cert_match` ▼ | Valid certificate that correctly covers the SNI |
@@ -583,6 +637,8 @@ suppressors is usually more interesting, not less. A handful are neutral tags
 | `rare_destination_N_clients` ● | Only N internal hosts contact this destination |
 | `rare_fingerprint_to_raw_ip` | An uncommon client fingerprint connecting to a bare IP with no SNI |
 | `rare_fingerprint_pivot` | This client fingerprint is rare across the estate and appears on a suspicious channel |
+| `rare_server_fingerprint` | The server's JA4S is seen by very few internal clients estate-wide. An attacker can mimic a client fingerprint but not the server's ServerHello unless they control the infrastructure, so a rare server stack is a genuine corroborator |
+| `rare_server_fingerprint_raw_ip` | A rare server fingerprint reached at a bare IP with no SNI — a rare server stack on anonymous infrastructure, the stronger of the two server-rarity signals |
 | `rare_ja3_to_trusted_pivot` ● | A rare fingerprint reaching a legitimate-but-abusable platform, where the cert does not validly cover the SNI |
 | `common_fingerprint_to_popular_dest` ▼ | Common fingerprint going to a widely-used destination |
 | `popular_upload_dest` ▼ | Several internal hosts upload to this destination — a shared service |
