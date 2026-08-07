@@ -242,6 +242,13 @@ export {
         # when we last emitted an exfil-escalation, for the slow-drain re-fire.
         exfil_rung:         count             &default = 0;
         exfil_last_alert:   time              &default = double_to_time(0);
+
+        # T if this flow's client offered Encrypted Client Hello (RFC 9849).
+        # Set from the ssl_encrypted_client_hello event. ECH hides the true
+        # SNI behind a generic outer SNI; today it is overwhelmingly a
+        # legitimate privacy-browser signal, so it is used only as mild
+        # context (see ech_awareness config), never as a standalone signal.
+        ech_offered:        bool              &default = F;
     };
 
 
@@ -354,6 +361,26 @@ export {
     global note_fp_client: function(fp: string, client: addr);
     global fp_client_count: function(fp: string): count;
 
+    # Server-fingerprint (JA4S/JA3S) rarity tracking. Symmetric with the
+    # client-side fp_clients: how many DISTINCT internal clients have seen a
+    # given SERVER fingerprint across the estate. A rare server response
+    # fingerprint is a stronger-than-informational signal because an attacker
+    # can freely mimic a browser CLIENT fingerprint, but cannot control the
+    # server's ServerHello unless they control the C2 infrastructure — and C2
+    # servers often run distinctive or minimal TLS server stacks. Known-bad
+    # JA4S values (e.g. Cobalt Strike team servers) appear in TI feeds.
+    global sfp_clients: table[string] of set[addr]
+        &default = function(s: string): set[addr] { return set(); };
+    global note_sfp_client: function(sfp: string, client: addr);
+    global sfp_client_count: function(sfp: string): count;
+
+    # Short-lived record of connections whose client offered Encrypted Client
+    # Hello, keyed by connection UID. Populated from ssl_encrypted_client_hello
+    # (which fires during the handshake) and consumed when flow state is built
+    # at ssl_established. Expires quickly — it only needs to bridge the gap
+    # between the two events within one connection.
+    global ech_seen_uids: set[string] &create_expire = 5min;
+
     # JA4 structured analytics (decompose the readable prefix).
     #   ja4_prefix:  the leading segment before the first "_"
     #                (e.g. "t13d1516h2" — proto/TLSver/SNI/#ciphers/#exts/ALPN).
@@ -419,6 +446,9 @@ export {
     # these encode the first ALPN value the client offered. "h2", "h1",
     # "00" (no ALPN), "dt" (DoT), etc. Returns "" if not parseable.
     global ja4_alpn_field: function(ja4: string): string;
+    global ja4_ext_count: function(ja4: string): count;
+    global tls_version_is_deprecated: function(ver: string): bool;
+    global cert_subject_is_structurally_poor: function(subject: string): bool;
 
     # Bump the browser-like cipher counter. Called whenever we see a
     # flow with both a JA4 and an HTTP ALPN — that's a positive signal
@@ -1002,6 +1032,25 @@ function fp_client_count(fp: string): count
     return |fp_clients[fp]|;
     }
 
+function note_sfp_client(sfp: string, client: addr)
+    {
+    if ( sfp == "" || sfp == "-" ) return;
+    if ( sfp !in sfp_clients )
+        {
+        if ( |sfp_clients| >= ja3_popularity_cap )
+            return;
+        sfp_clients[sfp] = set();
+        }
+    add sfp_clients[sfp][client];
+    }
+
+function sfp_client_count(sfp: string): count
+    {
+    if ( sfp == "" || sfp == "-" || sfp !in sfp_clients )
+        return 0;
+    return |sfp_clients[sfp]|;
+    }
+
 function ja4_prefix(ja4: string): string
     {
     # Leading segment before the first "_": proto/TLSver/SNI/#ciph/#ext/ALPN.
@@ -1189,6 +1238,69 @@ function ja4_alpn_field(ja4: string): string
     if ( |first| < 2 )
         return "";
     return first[|first| - 2:];
+    }
+
+# ja4_ext_count — the EXTENSION count encoded in the JA4 prefix. This is a
+# measure of how RICH the client's TLS offering is. Modern browsers carry
+# many extensions (SNI, ALPN, supported_groups, signature_algorithms,
+# key_share, psk_key_exchange_modes, ECH, GREASE, padding, ...) and typically
+# report 15-34; a minimal or hand-rolled TLS stack offers far fewer.
+#
+# Prefix layout: <proto><2-char ver><d|i><2-digit #ciphers><2-digit #exts><2-char ALPN>
+# e.g. "t13d1516h2" -> ciphers=15, exts=16. The extension count sits at
+# prefix positions [6:8].
+#
+# IMPORTANT: a low count is NOT a sign of maliciousness. Plenty of benign
+# software (IoT, medical/lab devices, simple agents, legacy tooling) also
+# offers a sparse ClientHello, and endpoint-telemetry agents have been
+# observed with very few extensions. This is an INFORMATIONAL signal only —
+# it describes simplicity, which is shared by simple malware and simple
+# benign software alike. Callers must treat it as context, never as a mover
+# on its own. Returns 999 (sentinel "unknown") when the prefix is malformed
+# or absent so callers can decline to tag.
+function ja4_ext_count(ja4: string): count
+    {
+    local p = ja4_prefix(ja4);
+    if ( |p| < 8 )
+        return 999;
+    local digits = p[6:8];
+    # Guard: both chars must be decimal digits, else treat as unknown.
+    if ( digits[0] < "0" || digits[0] > "9" ||
+         digits[1] < "0" || digits[1] > "9" )
+        return 999;
+    return to_count(digits);
+    }
+
+# tls_version_is_deprecated — T for TLS 1.1 / 1.0 / SSLv3 / SSLv2. Modern
+# software negotiates TLS 1.2 or 1.3; a deprecated version is odd in 2026.
+# But legacy medical/lab/embedded devices genuinely still speak old TLS, so
+# this is a tiny, combination-only nudge — never a mover alone. TLS 1.2 is
+# explicitly NOT deprecated here (it is still ubiquitous and current).
+function tls_version_is_deprecated(ver: string): bool
+    {
+    return ver == "TLSv11" || ver == "TLS11" ||
+           ver == "TLSv10" || ver == "TLS10" ||
+           ver == "SSLv3"  || ver == "SSLv2" ||
+           ver == "SSLv30" || ver == "SSLv20";
+    }
+
+# cert_subject_is_structurally_poor — T when a certificate Subject is empty
+# or degenerate (no CN, or a single trivial token). Many throwaway C2 certs
+# carry near-empty or garbage subjects. Modern malware trying to blend in
+# uses proper-looking certs, so this fires rarely — informational/mild,
+# combination-only. An empty subject string is treated as "unknown" (F),
+# since absence of data is not evidence of poverty.
+function cert_subject_is_structurally_poor(subject: string): bool
+    {
+    if ( subject == "" || subject == "-" )
+        return F;
+    # No CN= component at all is unusual for a server certificate.
+    if ( "CN=" !in subject )
+        return T;
+    # A CN present but empty (e.g. "CN=,") is degenerate.
+    if ( /CN=[,]/ in subject || /CN=$/ in subject )
+        return T;
+    return F;
     }
 
 function note_browser_ja4(ja4: string)
