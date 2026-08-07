@@ -574,6 +574,81 @@ export {
     option fingerprint_arm_max_hosts: count = 3;
 
     # ------------------------------------------------------------------
+    # Informational / micro TLS signals.
+    # ------------------------------------------------------------------
+    #
+    # The signals in this block are, individually, WEAK. Modern C2 deliberately
+    # mimics legitimate clients — correct TLS versions, real cipher suites,
+    # browser-like ALPN and certificates — so any single "simple" or "legacy"
+    # tell is exactly the kind of thing capable tooling fixes to blend in.
+    # Their value is therefore as STACKING CONTEXT, not as detectors: a flow
+    # that is beacon-shaped AND sparse-fingerprinted AND legacy-TLS AND
+    # hiding-its-SNI is suspicious because a tool sophisticated enough to
+    # beacon cleanly should not simultaneously trip several simplicity tells —
+    # the incongruity is the signal. Each is tagged for analyst visibility;
+    # scores are tiny and only meaningful in combination, and several add no
+    # score at all (pure indicators).
+
+    # ---- JA4 client-offering richness (extension count) ----
+    # Informational ONLY. A sparse ClientHello (few extensions) is shared by
+    # simple malware and simple/legacy benign software (IoT, medical/lab
+    # devices, minimal agents), so a low count is NOT a maliciousness signal.
+    # This adds a tag for context and, by default, ZERO score.
+    option ja4_richness_enabled: bool = T;
+    # Extension count at/below which the client offering is "sparse". Browsers
+    # sit at 15-34; minimal stacks well below. 8 is deliberately conservative.
+    option ja4_sparse_ext_threshold: count = 8;
+    # Score for a sparse offering. Default 0.0 — a pure informational tag. Can
+    # be raised to a tiny value by operators who want it to nudge in
+    # combination, but it is intentionally non-moving out of the box.
+    option ja4_sparse_offering_bonus: double = 0.0;
+
+    # ---- JA4S server-fingerprint rarity ----
+    # Stronger than the other signals here: an attacker can mimic a client
+    # fingerprint but not the server's ServerHello unless they control the
+    # infrastructure, and C2 servers often run distinctive/minimal TLS stacks.
+    # A rare server fingerprint reaching a raw IP with no SNI is a genuine
+    # pivot-quality signal; a rare server fingerprint on its own is a mild
+    # corroborator.
+    option server_fp_rarity_enabled: bool = T;
+    # A server fingerprint seen by at most this many distinct internal clients
+    # across the estate counts as rare.
+    option server_fp_rare_max_clients: count = 2;
+    # Mild bonus when the server fingerprint is rare (any destination).
+    option server_fp_rare_bonus: double = 0.08;
+    # Stronger bonus when a rare server fingerprint is reached at a raw IP with
+    # no SNI — the "rare server stack on anonymous infrastructure" case.
+    option server_fp_rare_raw_ip_bonus: double = 0.15;
+
+    # ---- Deprecated TLS/SSL version ----
+    # Tiny, combination-only. Legacy medical/lab/embedded devices genuinely
+    # still speak TLS 1.0/1.1, so this is benign-heavy in isolation.
+    option deprecated_tls_enabled: bool = T;
+    option deprecated_tls_bonus: double = 0.05;
+
+    # ---- ECH awareness ----
+    # Encrypted Client Hello hides the true SNI, exposing only a generic outer
+    # SNI. Today ECH is overwhelmingly a legitimate privacy-preserving BROWSER
+    # signal, so on its own it is INFORMATIONAL and mildly LEGITIMACY-leaning,
+    # not suspicious. It becomes mildly interesting only in the incongruous
+    # case: ECH offered by a NON-browser fingerprint (a minimal/Go stack
+    # bothering to implement ECH) and/or to a rare destination. This also
+    # future-proofs the no_sni logic: an ECH flow shows a present-but-generic
+    # SNI, not an empty one, so it should be distinguished from true no-SNI.
+    option ech_awareness_enabled: bool = T;
+    # Mild bonus ONLY when ECH is offered by a non-browser fingerprint. ECH
+    # from a browser shape adds nothing (it is expected, legitimate behaviour).
+    option ech_nonbrowser_bonus: double = 0.08;
+
+    # ---- Certificate structural poverty ----
+    # Empty/degenerate certificate subject (no CN, or an empty CN). Throwaway
+    # C2 certs sometimes carry these; modern blend-in malware does not, so it
+    # fires rarely. Mild, combination-only.
+    option cert_poverty_enabled: bool = T;
+    option cert_poverty_bonus: double = 0.08;
+
+
+    # ------------------------------------------------------------------
     # SNI / cert masquerade guard — REMOVED (deliberately).
     # ------------------------------------------------------------------
     #
