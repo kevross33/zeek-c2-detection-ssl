@@ -1066,6 +1066,74 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         add indicators["rare_fingerprint_to_raw_ip"];
         }
 
+    # ---- Server-fingerprint (JA4S) rarity ----
+    # Symmetric with the client-side rarity above. An attacker can mimic a
+    # client fingerprint but not the server's ServerHello unless they own the
+    # infrastructure, so a rare server fingerprint is a genuine corroborator.
+    # Strongest when reaching a raw IP with no SNI (rare stack on anonymous
+    # infrastructure); mild otherwise.
+    if ( server_fp_rarity_enabled )
+        {
+        local sfp_b = (st$ja4s != "") ? st$ja4s : st$ja3s;
+        local sfp_pop = sfp_client_count(sfp_b);
+        if ( sfp_b != "" && sfp_pop > 0 && sfp_pop <= server_fp_rare_max_clients )
+            {
+            if ( st$sni == "" || st$sni == "(empty)" )
+                {
+                conf += server_fp_rare_raw_ip_bonus;
+                add indicators["rare_server_fingerprint_raw_ip"];
+                }
+            else
+                {
+                conf += server_fp_rare_bonus;
+                add indicators["rare_server_fingerprint"];
+                }
+            }
+        }
+
+    # ---- JA4 client-offering richness (informational) ----
+    # A sparse ClientHello is shared by simple malware AND simple/legacy
+    # benign software, so this is a context tag with (by default) no score.
+    if ( ja4_richness_enabled && st$ja4 != "" && ! fp_is_browser )
+        {
+        local ext_n = ja4_ext_count(st$ja4);
+        if ( ext_n != 999 && ext_n <= ja4_sparse_ext_threshold )
+            {
+            conf += ja4_sparse_offering_bonus;   # default 0.0
+            add indicators["sparse_client_offering"];
+            }
+        }
+
+    # ---- Deprecated TLS/SSL version (tiny, combination-only) ----
+    if ( deprecated_tls_enabled && tls_version_is_deprecated(st$tls_version) )
+        {
+        conf += deprecated_tls_bonus;
+        add indicators["deprecated_tls_version"];
+        }
+
+    # ---- ECH awareness ----
+    # ECH offered by a NON-browser fingerprint is the mildly-incongruous case;
+    # ECH from a browser shape is expected/legitimate and adds nothing. The
+    # ech_offered marker is set in update_flow_state from the ECH extension.
+    if ( ech_awareness_enabled && st$ech_offered )
+        {
+        if ( ! fp_is_browser )
+            {
+            conf += ech_nonbrowser_bonus;
+            add indicators["ech_offered_nonbrowser"];
+            }
+        else
+            add indicators["ech_offered"];
+        }
+
+    # ---- Certificate structural poverty (mild, combination-only) ----
+    if ( cert_poverty_enabled &&
+         cert_subject_is_structurally_poor(st$cert_subject) )
+        {
+        conf += cert_poverty_bonus;
+        add indicators["cert_structurally_poor"];
+        }
+
     # ---- Common-fingerprint penalty ----
     # When the primary fingerprint is shared by many distinct clients in the
     # network, OR its JA4 prefix is a browser shape, the originator is almost
@@ -2287,6 +2355,12 @@ function update_flow_state(c: connection): FlowKey
             }
         }
 
+    # Sticky ECH marker: if this connection's client offered Encrypted Client
+    # Hello (recorded by the ssl_encrypted_client_hello event), remember it on
+    # the flow so it persists across the rolling window.
+    if ( c$uid in ech_seen_uids )
+        st$ech_offered = T;
+
     # ---- Grace period ----
     # For the first flow_grace_count connections we do NOT populate the
     # rolling window. This means a one-shot or two-shot connection (the
@@ -2381,6 +2455,18 @@ event Intel::match(s: Intel::Seen, items: set[Intel::Item]) &priority = -5
         note_intel_hit(0.0.0.0, domain, desc);
     }
 
+event ssl_extension(c: connection, is_client: bool, code: count, val: string)
+    {
+    # Detect an Encrypted Client Hello offer via the ECH extension code
+    # (RFC 9849 assigns encrypted_client_hello = 65037 / 0xFE0D). Using the
+    # generic ssl_extension event (stable signature across Zeek versions)
+    # rather than the version-specific ssl_encrypted_client_hello event. ECH
+    # hides the true SNI behind a generic outer SNI; we record only that it
+    # was OFFERED, for use as mild context.
+    if ( is_client && code == 65037 )
+        add ech_seen_uids[c$uid];
+    }
+
 event ssl_established(c: connection) &priority = -5
     {
     # Direction / scope gate — outbound only (see triage_skip).
@@ -2413,6 +2499,14 @@ event ssl_established(c: connection) &priority = -5
                            c$ssl?$ja4 ? c$ssl$ja4 : "");
     if ( pfp != "" )
         note_fp_client(pfp, c$id$orig_h);
+
+    # Server-fingerprint rarity: record which internal clients have seen this
+    # server's JA4S (preferred) or JA3S. Populated for every SSL flow so the
+    # estate-wide baseline is complete, mirroring the client-side tracking.
+    local sfp = (c$ssl?$ja4s && c$ssl$ja4s != "") ? c$ssl$ja4s :
+                ((c$ssl?$ja3s && c$ssl$ja3s != "") ? c$ssl$ja3s : "");
+    if ( sfp != "" )
+        note_sfp_client(sfp, c$id$orig_h);
 
     note_pivot(c);
 
