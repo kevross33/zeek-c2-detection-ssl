@@ -59,6 +59,8 @@ export {
         SSL_TRUSTED_PIVOT_RARE_FP,    # Rare client fingerprint to abusable CDN
         SSL_LONG_CONN_ANOMALY,        # Long-conn with suspicious properties
         SSL_NONSTANDARD_INNER_PROTO,  # Non-HTTPS protocol tunnelled inside TLS
+        NONTLS_TLS_PORT_SESSION,      # Non-TLS session on a TLS port, corroborated (1.3)
+        NONTLS_TLS_PORT_BEACON,       # Non-TLS sessions on a TLS port with beacon cadence (1.3)
     };
 
     # Inner protocol hints — what we think is running inside the TLS tunnel.
@@ -249,6 +251,11 @@ export {
         # legitimate privacy-browser signal, so it is used only as mild
         # context (see ech_awareness config), never as a standalone signal.
         ech_offered:        bool              &default = F;
+
+        # "self_signed_or_forged" when the server certificate is self-signed,
+        # or claims a separate issuer but is really self-issued (see
+        # cert_origin_label). Label only — never scored.
+        cert_origin:        string            &default = "";
     };
 
 
@@ -261,8 +268,53 @@ export {
     # State tables.
     # ------------------------------------------------------------------
 
+    # Full per-flow state. IDLE expiry (&write_expire): every connection
+    # writes the entry, refreshing it, so an active beacon persists for as
+    # long as it keeps checking in and is discarded only once it has been
+    # silent for beacon_max_interval. (Previously &create_expire hard-wiped
+    # every flow a fixed time after creation, discarding the history of any
+    # long-running beacon regardless of activity.)
     global flow_state: table[FlowKey] of FlowState
-        &create_expire = flow_state_expiry;
+        &write_expire = beacon_max_interval;
+
+    # Admission tier: first contacts only. Key "orig|dest_id|fp" -> time of
+    # first contact. A first contact allocates only this timestamp; a full
+    # FlowState is created only if the same key recurs within
+    # beacon_max_interval (see update_flow_state). One-off connections —
+    # the overwhelming majority — never cost more than this.
+    global candidate_seen: table[string] of time
+        &write_expire = beacon_max_interval;
+
+    # Server IPs that recently served an allowlisted SNI / CONNECT host. See
+    # safe_ip_learning_enabled in config.zeek.
+    global safe_learned_ips: set[addr]
+        &write_expire = safe_ip_learn_expiry;
+
+    # Certificate verdict of one connection (live, or reused from the cache
+    # for a resumed connection — see cert_cache_enabled).
+    type CertVerdict: record {
+        validation: string &default = "";
+        issuer:     string &default = "";
+        subject:    string &default = "";
+        sni_match:  bool   &default = F;
+        origin:     string &default = "";
+        from_cache: bool   &default = F;
+    };
+
+    # Last full-handshake verdict per (server IP, server port, lowercased SNI
+    # or "" when absent).
+    global cert_verdict_cache: table[addr, port, string] of CertVerdict
+        &write_expire = cert_cache_expiry;
+
+    # Record the verdict of a FULL handshake (no-op for resumed connections).
+    global note_cert_verdict: function(c: connection);
+    # The connection's verdict: live when it carried a certificate, else (if
+    # resumed) the cached verdict for the same IP/port/SNI.
+    global cert_verdict_for: function(c: connection): CertVerdict;
+    # "self_signed_or_forged" or "".
+    global cert_origin_label: function(c: connection): string;
+    # Normalised key identifier from an AKI/SKI extension value.
+    global key_id_hex: function(val: string): string;
 
 
     global ja3_clients: table[string] of set[addr]
@@ -446,6 +498,8 @@ export {
     # these encode the first ALPN value the client offered. "h2", "h1",
     # "00" (no ALPN), "dt" (DoT), etc. Returns "" if not parseable.
     global ja4_alpn_field: function(ja4: string): string;
+    # Resumption-invariant fingerprint used ONLY as the FlowKey grouping slot.
+    global flow_fp: function(ja3: string, ja4: string): string;
     global ja4_ext_count: function(ja4: string): count;
     global tls_version_is_deprecated: function(ver: string): bool;
     global cert_subject_is_structurally_poor: function(subject: string): bool;
@@ -514,6 +568,40 @@ export {
 
     # Record that a payload burst occurred on this host (marker with expiry).
     global mark_payload_staged: function(host: addr);
+
+    # Local-only variants: apply the state on THIS node without sharing it.
+    # Used by the cluster receive handlers (so a relayed verdict is never
+    # re-published). Detection code calls the non-_local wrappers.
+    global mark_host_compromised_local: function(host: addr, ja3: string,
+                                                 ja4: string);
+    global mark_payload_staged_local: function(host: addr);
+
+    # Allowlist propagation to SNI-less connections (see config.zeek).
+    global note_safe_dest_ip: function(ip: addr);
+    global is_learned_safe_ip: function(ip: addr): bool;
+
+    # ------------------------------------------------------------------
+    # Cluster state-sharing events (see cluster_share_state).
+    #   worker  -> aggregator : cl_dest_client     (HRW-routed per dest)
+    #   aggregator -> workers : cl_apply_dest_popular
+    #   worker  -> manager    : cl_share_*         (relay requests)
+    #   manager -> workers    : cl_apply_*         (applied locally only)
+    # ------------------------------------------------------------------
+    global cl_dest_client: event(dest_id: string, client: addr, node: string);
+    global cl_apply_dest_popular: event(dest_id: string);
+    global cl_share_host_compromised: event(host: addr, ja3: string, ja4: string);
+    global cl_apply_host_compromised: event(host: addr, ja3: string, ja4: string);
+    global cl_share_payload_staged: event(host: addr);
+    global cl_apply_payload_staged: event(host: addr);
+    global cl_share_safe_ip: event(ip: addr);
+    global cl_apply_safe_ip: event(ip: addr);
+
+    # True when this node is a worker in a cluster with sharing enabled.
+    global cluster_sharing_active: function(): bool;
+
+    # Per-host decision trace (see trace_orig_hosts). No-op unless the
+    # originator is being traced.
+    global trace: function(orig: addr, msg: string);
 
     # True if the host received a payload burst within payload_staged_window.
     global is_payload_staged: function(host: addr): bool;
@@ -1013,6 +1101,33 @@ function primary_fp(ja3: string, ja4: string): string
     return "";
     }
 
+# flow_fp — the fingerprint used to GROUP connections into one flow.
+#
+# TLS 1.3 session resumption adds a pre_shared_key extension to the
+# ClientHello, which changes the JA4 extension COUNT and extension HASH. The
+# same client therefore produces two JA4s (e.g. t13d1516h2_... on a full
+# handshake and t13d1517h2_... on a resumed one — both observed from the same
+# Chromium build). Keying flows on the full JA4 split one beacon into two
+# half-populated flows with irregular gaps, depressing or preventing
+# detection. The protocol/version/SNI-flag/cipher-count/ALPN prefix and the
+# CIPHER hash do not change on resumption, so the grouping key keeps those
+# and drops only the extension count and extension hash.
+#
+# This is used ONLY for grouping. Rarity, pivot, intel and reporting all
+# continue to use the full JA3/JA4 stored on the flow. Falls back to
+# primary_fp for a JA3-only or malformed JA4.
+function flow_fp(ja3: string, ja4: string): string
+    {
+    if ( flowkey_resumption_invariant &&
+         ja4 != "" && ja4 != "-" && ja4 != "(empty)" )
+        {
+        local parts = split_string(ja4, /_/);
+        if ( |parts| == 3 && |parts[0]| == 10 )
+            return fmt("%s%s_%s", parts[0][0:6], parts[0][8:10], parts[1]);
+        }
+    return primary_fp(ja3, ja4);
+    }
+
 function note_fp_client(fp: string, client: addr)
     {
     if ( fp == "" ) return;
@@ -1143,12 +1258,45 @@ function note_dest_client(dest_id: string, client: addr)
 
     if ( dest_id !in dest_client_count )
         dest_client_count[dest_id] = set();
+
+    # Only a NEW (destination, client) pair is interesting — for the local
+    # count and for the cluster-wide count alike. Repeat hits change nothing.
+    if ( client in dest_client_count[dest_id] )
+        return;
     add dest_client_count[dest_id][client];
+
+    # Cluster-wide popularity: route the new pair to the single aggregator
+    # that owns this destination (rendezvous hashing over the proxy pool, so
+    # every worker sends a given dest_id to the same proxy). If the cluster
+    # has no proxies, publish_hrw returns F and the manager aggregates.
+    if ( cluster_sharing_active() )
+        {
+        if ( ! Cluster::publish_hrw(Cluster::proxy_pool, dest_id,
+                                    cl_dest_client, dest_id, client,
+                                    Cluster::node) )
+            {
+@if ( Version::number >= 70100 )
+            Cluster::publish(Cluster::manager_topic, cl_dest_client,
+                             dest_id, client, Cluster::node);
+@else
+            Broker::publish(Cluster::manager_topic, cl_dest_client,
+                            dest_id, client, Cluster::node);
+@endif
+            }
+        }
 
     if ( |dest_client_count[dest_id]| > popular_dest_threshold )
         {
         add popular_dests[dest_id];
-        evict_state_for_dest(dest_id);
+        if ( eager_popular_eviction )
+            evict_state_for_dest(dest_id);
+        # LAZY eviction (when eager_popular_eviction = F): flow state for this destination is NOT scanned out
+        # here. Every entry point triage-skips a popular destination, so its
+        # remaining entries are never read or written again and simply age
+        # out through flow_state's idle expiry. The previous eager
+        # evict_state_for_dest() walked the ENTIRE flow_state table on every
+        # popularity flip — O(tracked flows) per flip, which on a large
+        # estate is a recurring CPU spike on every worker.
         # Reclaim memory from the per-dest set — once popular, we no
         # longer care about which clients hit it.
         delete dest_client_count[dest_id];
@@ -1328,7 +1476,7 @@ function is_browser_ja4(ja4: string): bool
 # Host compromise correlation implementations.
 # ----------------------------------------------------------------------
 
-function mark_host_compromised(host: addr, ja3: string, ja4: string)
+function mark_host_compromised_local(host: addr, ja3: string, ja4: string)
     {
     # Record / refresh compromised state with a fresh expiry.
     compromised_hosts[host] = network_time() + host_compromise_window;
@@ -1471,9 +1619,204 @@ function intel_hit_for_domain(domain: string): string
 # Payload-staging correlator implementations.
 # ----------------------------------------------------------------------
 
-function mark_payload_staged(host: addr)
+function mark_payload_staged_local(host: addr)
     {
     payload_staged_hosts[host] = network_time() + payload_staged_window;
+    }
+
+# ----------------------------------------------------------------------
+# Cluster state sharing.
+# ----------------------------------------------------------------------
+#
+# Publishing helpers. Cluster::publish was added in Zeek 7.1 and is the only
+# call that works on every cluster backend (Broker::publish is non-functional
+# under the ZeroMQ backend); Zeek 7.0 only has Broker::publish. With the
+# Broker backend workers do not peer with each other, so worker-originated
+# verdicts are sent to the manager, which relays them to all workers.
+
+function cluster_sharing_active(): bool
+    {
+    return cluster_share_state && Cluster::is_enabled() &&
+           Cluster::local_node_type() == Cluster::WORKER;
+    }
+
+function trace(orig: addr, msg: string)
+    {
+    if ( orig in trace_orig_hosts )
+        Reporter::info(fmt("C2_SSL trace %s [%s]: %s", orig,
+                           Cluster::is_enabled() ? Cluster::node : "standalone",
+                           msg));
+    }
+
+function mark_host_compromised(host: addr, ja3: string, ja4: string)
+    {
+    mark_host_compromised_local(host, ja3, ja4);
+    if ( ! cluster_sharing_active() || ! cluster_share_host_state )
+        return;
+@if ( Version::number >= 70100 )
+    Cluster::publish(Cluster::manager_topic, cl_share_host_compromised,
+                     host, ja3, ja4);
+@else
+    Broker::publish(Cluster::manager_topic, cl_share_host_compromised,
+                    host, ja3, ja4);
+@endif
+    }
+
+function mark_payload_staged(host: addr)
+    {
+    mark_payload_staged_local(host);
+    if ( ! cluster_sharing_active() || ! cluster_share_host_state )
+        return;
+@if ( Version::number >= 70100 )
+    Cluster::publish(Cluster::manager_topic, cl_share_payload_staged, host);
+@else
+    Broker::publish(Cluster::manager_topic, cl_share_payload_staged, host);
+@endif
+    }
+
+# Remember a server IP that just served an allowlisted SNI / CONNECT host.
+# Shared cluster-wide only on the FIRST local learn (bounded volume); the
+# &write_expire refresh on repeat hits stays local.
+function note_safe_dest_ip(ip: addr)
+    {
+    if ( ! safe_ip_learning_enabled )
+        return;
+    if ( ip in safe_learned_ips )
+        {
+        add safe_learned_ips[ip];   # refresh idle expiry
+        return;
+        }
+    add safe_learned_ips[ip];
+    if ( ! cluster_sharing_active() )
+        return;
+@if ( Version::number >= 70100 )
+    Cluster::publish(Cluster::manager_topic, cl_share_safe_ip, ip);
+@else
+    Broker::publish(Cluster::manager_topic, cl_share_safe_ip, ip);
+@endif
+    }
+
+function is_learned_safe_ip(ip: addr): bool
+    {
+    return safe_ip_learning_enabled && ip in safe_learned_ips;
+    }
+
+# ----------------------------------------------------------------------
+# Certificate verdicts and the resumed-connection cache.
+# ----------------------------------------------------------------------
+
+# Normalise an Authority/Subject Key Identifier extension value to bare
+# upper-case hex. OpenSSL renders these as colon-separated hex, optionally
+# prefixed with "keyid:" (and, for AKI, possibly followed by DirName/serial
+# lines) — the FIRST hex run after removing the prefix is the key id.
+function key_id_hex(val: string): string
+    {
+    local v = sub(val, /keyid:/, "");
+    local m = match_pattern(v, /([0-9A-Fa-f][0-9A-Fa-f]:)+[0-9A-Fa-f][0-9A-Fa-f]/);
+    if ( ! m$matched )
+        return "";
+    return to_upper(gsub(m$str, /:/, ""));
+    }
+
+# Label a certificate that was not issued by any real CA:
+#   * validation status exactly "self signed certificate", or
+#   * subject == issuer on a failing certificate, or
+#   * a failing single-certificate chain whose leaf claims a separate issuer
+#     but has no Authority Key Identifier, or an AKI equal to its own Subject
+#     Key Identifier. A genuinely CA-issued leaf always carries an AKI naming
+#     the issuing CA's (different) key; a self-signed certificate with a
+#     forged issuer name has none, or one that points back at itself (what
+#     openssl and Go typically emit when self-signing).
+# A real CA-issued certificate that merely fails to validate here (private
+# CA, missing intermediate) is NOT labelled. Label only — never scored.
+function cert_origin_label(c: connection): string
+    {
+    if ( ! c?$ssl || ! c$ssl?$validation_status )
+        return "";
+    local vs = c$ssl$validation_status;
+    if ( vs == "" || vs == "-" || vs == "(empty)" || vs == "ok" )
+        return "";
+    if ( vs == "self signed certificate" )
+        return "self_signed_or_forged";
+    if ( ! c$ssl?$subject || ! c$ssl?$issuer )
+        return "";
+    if ( c$ssl$subject == c$ssl$issuer )
+        return "self_signed_or_forged";
+    if ( ! c$ssl?$cert_chain || |c$ssl$cert_chain| != 1 )
+        return "";
+    if ( ! c$ssl$cert_chain[0]?$x509 )
+        return "";
+    local aki = "";
+    local ski = "";
+    for ( i in c$ssl$cert_chain[0]$x509$extensions )
+        {
+        local e = c$ssl$cert_chain[0]$x509$extensions[i];
+        if ( e$oid == "2.5.29.35" )
+            aki = key_id_hex(e$value);
+        else if ( e$oid == "2.5.29.14" )
+            ski = key_id_hex(e$value);
+        }
+    if ( aki == "" || ( ski != "" && aki == ski ) )
+        return "self_signed_or_forged";
+    return "";
+    }
+
+function cert_cache_sni(c: connection): string
+    {
+    if ( c?$ssl && c$ssl?$server_name && c$ssl$server_name != "" &&
+         c$ssl$server_name != "(empty)" )
+        return to_lower(c$ssl$server_name);
+    return "";
+    }
+
+function conn_has_cert(c: connection): bool
+    {
+    if ( ! c?$ssl )
+        return F;
+    if ( c$ssl?$validation_status && c$ssl$validation_status != "" &&
+         c$ssl$validation_status != "-" &&
+         c$ssl$validation_status != "(empty)" )
+        return T;
+    return c$ssl?$issuer && c$ssl$issuer != "" && c$ssl$issuer != "-";
+    }
+
+function live_cert_verdict(c: connection): CertVerdict
+    {
+    local v: CertVerdict;
+    if ( ! c?$ssl )
+        return v;
+    if ( c$ssl?$validation_status ) v$validation = c$ssl$validation_status;
+    if ( c$ssl?$issuer )            v$issuer     = c$ssl$issuer;
+    if ( c$ssl?$subject )           v$subject    = c$ssl$subject;
+    if ( c$ssl?$sni_matches_cert )  v$sni_match  = c$ssl$sni_matches_cert;
+    v$origin = cert_origin_label(c);
+    return v;
+    }
+
+function note_cert_verdict(c: connection)
+    {
+    if ( ! cert_cache_enabled || ! c?$ssl )
+        return;
+    if ( c$ssl?$resumed && c$ssl$resumed )
+        return;
+    if ( ! conn_has_cert(c) )
+        return;
+    cert_verdict_cache[c$id$resp_h, c$id$resp_p, cert_cache_sni(c)] =
+        live_cert_verdict(c);
+    }
+
+function cert_verdict_for(c: connection): CertVerdict
+    {
+    # A connection that carried its own certificate is always judged on it.
+    if ( conn_has_cert(c) || ! cert_cache_enabled || ! c?$ssl ||
+         ! c$ssl?$resumed || ! c$ssl$resumed )
+        return live_cert_verdict(c);
+    local key_sni = cert_cache_sni(c);
+    if ( [c$id$resp_h, c$id$resp_p, key_sni] !in cert_verdict_cache )
+        return live_cert_verdict(c);
+    local v = copy(cert_verdict_cache[c$id$resp_h, c$id$resp_p, key_sni]);
+    v$from_cache = T;
+    return v;
     }
 
 function is_payload_staged(host: addr): bool
@@ -1599,3 +1942,123 @@ function human_bytes(n: count): string
         return fmt("%.0fKB", (n + 0.0) / 1000.0);
     return fmt("%dB", n);
     }
+
+# ======================================================================
+# CLUSTER STATE SHARING — receive side.
+# ======================================================================
+#
+# Nothing below does any work in standalone mode: the events are only ever
+# published when cluster_sharing_active() is true on a worker.
+
+# ---- Worker side: apply relayed verdicts LOCALLY (never re-publish). ----
+
+event C2_SSL::cl_apply_dest_popular(dest_id: string)
+    {
+    add popular_dests[dest_id];
+    if ( dest_id in dest_client_count )
+        delete dest_client_count[dest_id];
+    }
+
+event C2_SSL::cl_apply_host_compromised(host: addr, ja3: string, ja4: string)
+    {
+    mark_host_compromised_local(host, ja3, ja4);
+    }
+
+event C2_SSL::cl_apply_payload_staged(host: addr)
+    {
+    mark_payload_staged_local(host);
+    }
+
+event C2_SSL::cl_apply_safe_ip(ip: addr)
+    {
+    if ( safe_ip_learning_enabled )
+        add safe_learned_ips[ip];
+    }
+
+@if ( Cluster::is_enabled() && ( Cluster::local_node_type() == Cluster::PROXY || Cluster::local_node_type() == Cluster::MANAGER ) )
+
+# ---- Aggregator side (a proxy, or the manager when there are no proxies):
+#      cluster-wide distinct-client counting per destination. Each dest_id
+#      is owned by exactly one proxy (rendezvous hashing), so its count is
+#      complete. ----
+
+# &create_expire (NOT &write_expire): the distinct-client count is a ROLLING
+# window from first sight, exactly like the worker-side dest_client_count.
+# &write_expire would be refreshed by every new client, turning the set into a
+# one-way ratchet in which any destination touched by enough hosts over ANY
+# number of days eventually becomes popular and is dropped from analysis.
+global cl_agg_clients: table[string] of set[addr]
+    &create_expire = popular_dest_expiry;
+global cl_agg_popular: set[string]
+    &write_expire = popular_dest_expiry;
+
+event C2_SSL::cl_dest_client(dest_id: string, client: addr, node: string)
+    {
+    if ( dest_id in cl_agg_popular )
+        {
+        # Already popular cluster-wide; this worker has not heard (e.g. its
+        # local marker aged out). Tell only that worker.
+        add cl_agg_popular[dest_id];
+@if ( Version::number >= 70100 )
+        Cluster::publish(Cluster::node_topic(node), cl_apply_dest_popular,
+                         dest_id);
+@else
+        Broker::publish(Cluster::node_topic(node), cl_apply_dest_popular,
+                        dest_id);
+@endif
+        return;
+        }
+
+    if ( dest_id !in cl_agg_clients )
+        cl_agg_clients[dest_id] = set();
+    add cl_agg_clients[dest_id][client];
+
+    if ( |cl_agg_clients[dest_id]| > cluster_popular_dest_threshold )
+        {
+        add cl_agg_popular[dest_id];
+        delete cl_agg_clients[dest_id];
+@if ( Version::number >= 70100 )
+        Cluster::publish(Cluster::worker_topic, cl_apply_dest_popular, dest_id);
+@else
+        Broker::publish(Cluster::worker_topic, cl_apply_dest_popular, dest_id);
+@endif
+        }
+    }
+
+@endif
+
+@if ( Cluster::is_enabled() && Cluster::local_node_type() == Cluster::MANAGER )
+
+# ---- Manager: relay worker verdicts to every worker. (Under the Broker
+#      backend workers do not peer with one another.) ----
+
+event C2_SSL::cl_share_host_compromised(host: addr, ja3: string, ja4: string)
+    {
+@if ( Version::number >= 70100 )
+    Cluster::publish(Cluster::worker_topic, cl_apply_host_compromised,
+                     host, ja3, ja4);
+@else
+    Broker::publish(Cluster::worker_topic, cl_apply_host_compromised,
+                    host, ja3, ja4);
+@endif
+    }
+
+event C2_SSL::cl_share_payload_staged(host: addr)
+    {
+@if ( Version::number >= 70100 )
+    Cluster::publish(Cluster::worker_topic, cl_apply_payload_staged, host);
+@else
+    Broker::publish(Cluster::worker_topic, cl_apply_payload_staged, host);
+@endif
+    }
+
+event C2_SSL::cl_share_safe_ip(ip: addr)
+    {
+@if ( Version::number >= 70100 )
+    Cluster::publish(Cluster::worker_topic, cl_apply_safe_ip, ip);
+@else
+    Broker::publish(Cluster::worker_topic, cl_apply_safe_ip, ip);
+@endif
+    }
+
+@endif
