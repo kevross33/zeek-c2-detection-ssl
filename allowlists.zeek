@@ -226,8 +226,18 @@ export {
         ".csc.cisco.com",
         ".binalyze.io",
         ".splunkcloud.com",
+        # ESET: all vendor-owned apex domains from ESET's third-party
+        # firewall reference (KB332). LiveGrid uses e5.sk; regional and
+        # software-distribution services use eset.eu / eset.sk /
+        # esetsoftware.com. Region-specific ESET PROTECT cloud endpoints
+        # hosted on third-party cloud FQDNs are deliberately NOT listed —
+        # add your tenant's exact host in local-exclusions.zeek.
         ".eset.systems",
         ".eset.com",
+        ".e5.sk",
+        ".eset.eu",
+        ".eset.sk",
+        ".esetsoftware.com",
 
         # ---------------------------------------------------------------
         # OneDrive consumer sync client (IDs 35, 36, 53)
@@ -583,6 +593,11 @@ function sni_ends_with_any(sni: string, suffixes: set[string]): bool
     if ( sni == "" || sni == "(empty)" )
         return F;
     local lc = to_lower(sni);
+    # Normalise a fully-qualified trailing dot ("host.example.com.") —
+    # otherwise it can never match a suffix and silently escapes the
+    # allowlist.
+    if ( |lc| > 1 && lc[|lc| - 1:] == "." )
+        lc = lc[0:|lc| - 1];
     for ( suffix in suffixes )
         {
         # Match ".suffix" at end of hostname, e.g. ".lync.com" matches
