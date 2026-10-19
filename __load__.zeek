@@ -23,6 +23,7 @@
 # also has an operator-provided intel hit. If no Intel feeds are configured
 # this loads harmlessly and the corroboration simply never triggers.
 @load base/frameworks/intel
+@load base/protocols/dns
 # NOTE: do NOT @load base/protocols/x509 — it was merged into
 #       base/protocols/ssl in Zeek 5 and no longer exists as a
 #       standalone path. Loading it causes the fatal error you saw.
@@ -31,6 +32,7 @@
 @load ./allowlists
 @load ./shared
 @load ./detect
+@load ./nontls
 
 # Site-specific tuning that SURVIVES package upgrades. This file only
 # extends the package sets with `+=`, and must be preserved (not
