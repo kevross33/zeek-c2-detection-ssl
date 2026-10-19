@@ -20,7 +20,8 @@ It will also attempt to detect other activities over the C2 channel including po
 Another note is it does support definition of web proxies. The correct positioning of a sensor for this between the client and the web proxy so we can see the true client as well as potential fingerprinting. This however is only partially tested at the moment and only client to Internet has been fully tested in network. It exists to provide that detection on what can still be detected on but also to deal with potential false positive skews proxies may introduce if not defined correctly.
 
 ## Package scope
-Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8.
+Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8 —
+and of non-TLS sessions on ports where TLS is expected (by default 443).
 Designed for noisy enterprise networks (tens of thousands users & devices, mixed PC/IoT etc).
 
 False positives are the dominant operational cost. The framework is designed
@@ -81,6 +82,8 @@ an internal service, not a compromised host beaconing out.
 | `SSL_REVERSE_FLOW_RAT` | Server-driven RAT: the SPL path detects idle→command→result rhythm; two additional SPL-independent shapes catch interactive shells — long-lived idle keep-alives (hours open, near-zero throughput) and reverse-asymmetry (client streams stdout while server sends tiny typed-command payloads) |
 | `SSL_TRUSTED_PIVOT_RARE_FP` | Connection to popular abusable host (Azure FD, Dropbox, Cloudflare) with a rare network-wide JA3 fingerprint |
 | `SSL_NONSTANDARD_INNER_PROTO` | Non-HTTP(S) protocol tunnelled inside TLS (ALPN-based or packet-size distribution) |
+| `NONTLS_TLS_PORT_SESSION` | A genuine, bidirectional **non-TLS** session on a TLS port (custom binary C2 on 443), corroborated by threat intel or a compromised host plus a strong behaviour. See *Non-TLS sessions on TLS ports* |
+| `NONTLS_TLS_PORT_BEACON` | As above, across repeated sessions with tight beacon cadence |
 
 All alerts are written to `c2_detections_ssl.log`.
 
@@ -482,32 +485,57 @@ The framework uses three separate mechanisms to avoid tracking legitimate traffi
 ### 1. The 5-host rule (popularity-based eviction)
 
 The single most powerful FP killer. The framework counts distinct clients
-per destination across the entire network. Once more than **5 distinct
-clients** in the network have connected to any given destination
-(lowercased SNI or IP), the destination is marked "popular" and:
+per destination across the entire network (cluster-wide when
+`cluster_share_state` is on — see *Cluster deployment*). Once more than
+`popular_dest_threshold` distinct clients (default **3**) have connected to a
+destination (lowercased SNI or IP), it is marked "popular" and:
 
-- Any existing per-flow state for it is immediately evicted (memory reclaimed)
 - All future connections to it skip tracking entirely (no CPU cost)
+- Existing per-flow state for it is never read again and ages out through
+  idle expiry (lazy eviction — no full-table scan on each flip)
 
 This catches the long tail of legitimate niche services (regional news,
 vendor portals, CRM/HR/finance SaaS, video conferencing, niche cloud apps)
 without requiring any pre-curated allowlist.
 
-The threshold is configurable: `redef C2_SSL::popular_dest_threshold = 5`.
+The threshold is configurable: `redef C2_SSL::popular_dest_threshold = 5;`.
 
-### 2. Active abandonment of non-beacon flows
+### 2. Tracking admission and abandonment
 
-The framework actively drops flows from tracking when they're determined
-not to be beacons:
+State is only spent on behaviour, and is released on silence:
 
-- After **10 samples**, if the flow is not session-resumption-pinned and its
-  jitter exceeds 50%, the flow is conclusively browsing — state is deleted
-- After **1 hour** of tracking with fewer than 6 samples, the flow is
-  abandoned (it's casual one-shot traffic, not a beacon)
+- **Admission (two-tier).** A host's *first* connection to a destination
+  allocates no flow state — only a small timestamp. Full state is created only
+  if the same host, destination and TLS stack **recur** within
+  `beacon_max_interval` (default 4 h). Most traffic is one-off and never costs
+  more than that timestamp.
+- **Chaotic abandonment.** After **10 samples**, a flow that is not
+  session-resumption-pinned and whose jitter exceeds `beacon_chaotic_threshold`
+  (70%) is conclusively not a beacon and is deleted — unless lag-1
+  autocorrelation shows a patterned (alternating) sleep, which is kept.
+- **Silence-based expiry.** A tracked flow is discarded once it has been
+  silent for longer than `beacon_max_interval`. An active beacon is never
+  wiped mid-life, however long it runs.
 
-These work together: noisy fast-polling browsing gets dropped after 10 hits;
-slow occasional browsing gets dropped after an hour. Both free memory aggressively
-and prevent state accumulation over long sensor uptime.
+**Slow beacons are held to a stricter bar.** Periodic timing on its own is
+shared by a great deal of legitimate software, and a perfectly regular
+legitimate poller can reach high confidence on timing alone. A beacon whose
+median interval is at least `slow_beacon_min_interval` (12 min) therefore
+alerts only if it reaches `slow_beacon_alert_confidence` (0.85) **and** carries
+at least `slow_beacon_min_corroborators` (1) *independent* signal — a
+certificate, SNI, TLS-stack-rarity or threat-intel indicator from
+`beacon_corroborating_indicators`. Timing and shape tags, informational tags
+and host-state escalations never count. Such alerts carry the `slow_beacon`
+indicator. `beacon_min_corroborators` (default 0, the 1.0 behaviour) applies
+the same corroboration requirement to *every* beacon — raise it to 1 to tighten
+the whole detector. Set `legacy_flow_lifecycle = T` to disable slow-beacon
+tracking entirely.
+
+Earlier versions abandoned any flow with fewer than 6 samples after 1 hour and
+hard-expired all flow state 6 hours after creation. Together those made every
+beacon with an interval of about **13 minutes or longer undetectable** — it was
+wiped before it could collect enough samples. Beacons up to
+`beacon_max_interval` are now tracked; raise it to cover slower implants.
 
 ### 3. Pre-curated safe-suffix bypass (Microsoft 365 et al.)
 
@@ -533,6 +561,27 @@ without this bypass.
 `*.blob.core.windows.net`, `*.trafficmanager.net` are in `trusted_pivot_suffixes`
 (not bypassed). These CDN/blob services CAN be abused as C2 staging/fronting
 and are still tracked for JA3 fingerprint rarity.
+
+
+### 4. Allowlist propagation to SNI-less connections
+
+Domain allowlist entries match on SNI (or the proxy CONNECT host). A
+connection with **no SNI** is keyed by its raw IP and could never match a
+domain entry, so vendor agents that connect sometimes by hostname and
+sometimes straight to the same IP (security agents, update and telemetry
+services) leaked past allowlists the operator believed were in force.
+
+On by default (`safe_ip_learning_enabled`). When a connection is bypassed
+because its SNI is allowlisted, its server IP is remembered for `safe_ip_learn_expiry` (6 h). Later connections to that IP that
+carry no SNI and no CONNECT host inherit the bypass. A connection to the same
+IP that presents a *different*, non-allowlisted SNI is still fully analysed,
+so a shared CDN/cloud edge IP cannot be used to slip unrelated traffic past
+the allowlist. Proxy IPs are never learned. Trailing-dot FQDNs
+(`host.example.com.`) are normalised before matching.
+
+If a vendor's SNI-less connections go to IPs that never serve its hostnames,
+learning cannot help — exclude the vendor's netblocks with
+`trusted_dest_subnets` in `local-exclusions.zeek`.
 
 ## Log schema highlights (c2_detections_ssl.log)
 
@@ -574,6 +623,7 @@ suppressors is usually more interesting, not less. A handful are neutral tags
 | `patterned_sleep_cadence` | Strong negative lag-1 autocorrelation: an alternating short/long sleep pattern, a deliberate evasion that inflates jitter while staying mechanical |
 | `jittered_beacon` ● | Cadence sits in the jittered tier (jitter above the tight threshold but still beacon-like) |
 | `uniform_keepalive_cadence` | Packet timing inside a long-lived tunnel is machine-uniform |
+| `slow_beacon` ● | Median interval ≥ `slow_beacon_min_interval` (12 min). The alert passed the stricter slow-beacon gate: higher confidence **and** independent corroboration |
 | `very_slow_cadence` ● | Very low packet rate — tagged for visibility, not disqualifying (persistent C2 can be slow) |
 | `long_silence` | A long mid-flow silent gap, consistent with waiting for an operator command |
 | `mid_flow_silence_then_burst` ● | The reverse-tasking rhythm: idle → small inbound (command) → larger outbound (result) |
@@ -624,6 +674,8 @@ suppressors is usually more interesting, not less. A handful are neutral tags
 | `sparse_client_offering` ● | The client's JA4 shows few TLS extensions (a simple/minimal stack). Informational only — simple *benign* software (IoT, medical devices, agents) looks identical to simple malware, so this carries no score by default |
 | `ech_offered` ● | Client offered Encrypted Client Hello (hides the true SNI). Today overwhelmingly a legitimate privacy-browser signal — context only, no score |
 | `ech_offered_nonbrowser` | ECH offered by a non-browser fingerprint — the mildly incongruous case (a minimal stack bothering to implement ECH) |
+| `self_signed_or_forged_cert` ● | Certificate was not issued by any real CA: self-signed, or it names a separate issuer but has no Authority Key Identifier or one pointing back at itself (a self-signed cert with a forged issuer). A real CA-issued cert that merely fails validation here (private CA, missing intermediate) is not tagged. Label only — no score |
+| `cert_context_from_cache` ● | A resumed connection (no certificate on the wire) was judged on the verdict of the last full handshake to the same server IP, port and SNI |
 | `cert_structurally_poor` | Certificate subject is empty or degenerate (no CN / empty CN) — sometimes seen on throwaway C2 certs; mild, combination-only |
 | `inner_looks_like_https` ▼ | The tunnelled protocol looks like genuine HTTPS |
 | `web_alpn_observed` ▼ | A real web ALPN (`h2`/`http/1.1`) was negotiated |
@@ -644,6 +696,15 @@ suppressors is usually more interesting, not less. A handful are neutral tags
 | `common_fingerprint_to_popular_dest` ▼ | Common fingerprint going to a widely-used destination |
 | `popular_upload_dest` ▼ | Several internal hosts upload to this destination — a shared service |
 | `fanout_N_clients` ▼ | N internal hosts contact this destination — fan-out indicates a shared service, not single-host C2 |
+
+**Non-TLS sessions on TLS ports**
+
+| Indicator | Meaning |
+|---|---|
+| `non_tls_on_tls_port` | A session observed from its start, bidirectional, with no protocol identified, on a port where TLS is expected |
+| `regular_cadence` | Repeated such sessions to the same server with tight beacon timing |
+| `exfil_upload_shape` | Upload-dominant transfer of at least `nontls_exfil_min_bytes` |
+| `long_lived_session` | Session lasted at least `nontls_session_min_duration` |
 
 **Host & campaign correlation**
 
@@ -676,6 +737,70 @@ The `details` string carries the raw measurements behind those indicators:
 | `payload_bursts` | Recorded download bursts as `<size>@<seconds-into-flow>` |
 | `bps` / `avg_pkt` / `dur` | Throughput, average packet size, and connection duration (tunnel detections) |
 
+## Non-TLS sessions on TLS ports
+
+A custom binary C2 protocol on port 443 never produces a TLS handshake, so
+the TLS detectors never see it. `nontls.zeek` judges these sessions, on the
+ports in `nontls_ports` (default `{ 443/tcp }` — add e.g. `8443/tcp`). It is
+deliberately strict, because "not TLS" is only knowable if the start of the
+connection was seen.
+
+**Hard gate — all required:**
+
+- Zeek saw the session **start**: history begins with the client SYN (`S`)
+  and contains the server SYN-ACK (`h`). Sessions Zeek joined mid-stream —
+  for example every long-lived connection after a sensor restart — are never
+  judged. (This was the cause of the false positives from an earlier
+  encrypted-tunnel detector, since removed.)
+- No content gaps (`g`/`G`), so a missed ClientHello cannot look like non-TLS.
+- Data in **both** directions (`D` and `d`), at least `nontls_min_bytes`.
+- Zeek confirmed **no** protocol analyzer — not TLS, not HTTP, not SSH.
+- Not excluded (see below), and the destination is rare (at most
+  `nontls_max_dest_clients` internal hosts).
+
+**Evidence.** An alert needs at least `nontls_min_evidence` (2) of:
+threat-intel hit on the destination; the host already compromised (a TLS C2
+detection); regular beacon cadence across sessions; an upload-dominant
+transfer of at least `nontls_exfil_min_bytes` (1 MB, PCR ≥ 0.80); a session
+of at least `nontls_session_min_duration` (15 min). In addition it needs at
+least one **external** corroborator (intel, compromised host, or cadence)
+**and** at least one **strong** behaviour (intel, cadence, or exfil). Shape
+alone (exfil + long session) and compromised host + long session never
+alert, because legitimate proprietary agents (backup, remote support) can
+look like either. Confidence is 0.80 with two evidence items, 0.90 with
+three, 1.0 with four or more.
+
+Non-TLS alerts never mark a host compromised, so they cannot escalate the TLS
+detectors. No SPL is available (spl-spt only measures TLS records), so the
+intra-session command/response rhythm of a reverse shell cannot be judged
+here — only connection-level facts.
+
+**Exclusions.** Trusted hosts and subnets, proxies, popular destinations and
+IPs learned from allowlisted SNIs apply exactly as for TLS. Domain entries in
+`safe_sni_suffixes` (including your `local-exclusions.zeek` list) apply
+through **DNS**, since these sessions have no SNI: IPs returned for an
+allowlisted name are excluded for `nontls_dns_safe_expiry` (6 h)
+(`nontls_dns_exclusions`, used only by this detector — it does not widen the
+TLS bypass). Benign non-TLS-on-443 software to plan for: TeamViewer (falls
+back to its own protocol on 443), OpenVPN over TCP 443, and some vendor
+remote-support tools. Exclude sanctioned ones by domain or by
+`trusted_dest_hosts` / `trusted_dest_subnets`. Disable the detector with
+`redef C2_SSL::nontls_enabled = F;`.
+
+## Certificate context for resumed connections
+
+A resumed TLS connection sends no certificate. The beacon detector keeps
+certificate context per flow, so it is unaffected — but the tunnel and
+reverse-flow detectors judge a single connection, so a resumed one used to
+lose both its valid-certificate suppressor (a false-positive source) and its
+bad-certificate corroborators (a false-negative source). The verdict of the
+last full handshake to the same server IP, port **and SNI** is now reused
+for resumed connections only (`cert_cache_enabled`, reused for
+`cert_cache_expiry`, 24 h), so a resumed connection scores exactly as the
+handshake it resumes did. SNI is part of the key, so a destination sharing a
+CDN IP never inherits another domain's certificate. `ssl.log` is never
+modified. Such alerts carry `cert_context_from_cache`.
+
 ## Inner protocol detection
 
 The `inner_proto` field answers: *what protocol is actually running inside this TLS tunnel?*
@@ -693,6 +818,49 @@ The `inner_proto` field answers: *what protocol is actually running inside this 
 a strong indicator of a non-HTTPS covert channel (hVNC, RDP-over-TLS, SSH
 wrapped in TLS, custom C2 protocol). `INNER_SMALL_UNIFORM` typically indicates
 a keep-alive/heartbeat-style C2 agent.
+
+## Cluster deployment
+
+In a Zeek cluster each worker keeps its own state and sees only a slice of the
+traffic. Two things matter:
+
+**1. Load-balancing must keep a host/destination pair on one worker.** Beacon
+detection works by comparing *successive connections* between the same client
+and server. Each new connection uses a new source port, so if your load
+balancer hashes on the full connection 5-tuple (ports included), consecutive
+check-ins from one host to one C2 land on different workers: each worker sees
+a sparse, irregular subsample and the beacon looks like noise. Configure the
+balancer to hash on the **source/destination IP pair** (2-tuple, symmetric).
+The default for several capture methods includes ports — check yours. A quick
+sanity check: in `c2_detections_ssl.log`, confirmed beacons should show high
+`cnt=` values consistent with their interval; if beacons you can see in
+`conn.log` never accumulate samples, the hash is splitting them.
+
+**2. Cluster state sharing (`cluster_share_state`, on by default).** Without
+it the popularity bypass counts clients *per worker*, so a destination used by
+hundreds of hosts spread over many workers may never be recognised as popular
+anywhere — it stays tracked and analysed. Host-compromise, payload-staging and
+learned-safe-IP verdicts would likewise stay on the worker that produced them,
+while the host's other flows hash elsewhere. With sharing on:
+
+- new (destination, client) pairs are counted by one aggregator per
+  destination (a proxy chosen by rendezvous hashing, or the manager if the
+  cluster has no proxies). A destination seen by more than
+  `cluster_popular_dest_threshold` (default **20**) distinct hosts in a
+  rolling 24 h window is broadcast to all workers as popular. This is
+  deliberately separate from — and much higher than — the per-worker
+  `popular_dest_threshold`, so a C2 beaconing from a small cluster of infected
+  hosts is not bypassed estate-wide; the per-worker rule behaves exactly as
+  before;
+- learned-safe-IP verdicts are relayed via the manager to every worker;
+- host-compromise and payload-staging verdicts are relayed **only** when
+  `cluster_share_host_state = T` (off by default). Relaying them makes one
+  detection escalate the host's flows on every worker, which raises alert
+  volume and lets a single false positive spread.
+
+All of this is low-volume (only *new* pairs and rare verdicts are published)
+and has no effect in standalone mode. It uses `Cluster::publish` on Zeek 7.1+
+(required for the ZeroMQ backend) and `Broker::publish` on 7.0.
 
 ## Installation
 
@@ -804,7 +972,7 @@ See `local.zeek.example` section 1a for the interception-CA tuning block.
 
 ```
 scripts/__load__.zeek        Load order: config → allowlists → shared → detect
-                             → local-exclusions (last, so site tuning wins)
+                             → nontls → local-exclusions (last, so site tuning wins)
 scripts/config.zeek          All thresholds — every one is a redefable option/const
 scripts/allowlists.zeek      PACKAGE-curated safe bypasses: O365, Teams, Exchange,
                              major cloud/vendor/PKI; trusted-pivot list;
@@ -818,6 +986,7 @@ scripts/sandbox.zeek         Relaxed gates for SHORT offline PCAP replay only.
 scripts/shared.zeek          Log schema (c2_detections_ssl.log), types, helpers
 scripts/detect.zeek          Detectors: beacon, tunnel, reverse-flow, pivot,
                              inner-protocol classification; proxy + CONNECT handling
+scripts/nontls.zeek          Non-TLS sessions on TLS ports (custom binary C2 on 443)
 local.zeek.example           Copy-paste site configuration template
 testing/verify_against_supplied_logs.py
                              Python replay harness — confirms correct detections
