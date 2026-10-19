@@ -885,10 +885,143 @@ export {
     # Active abandonment (stop tracking flows that aren't beacons).
     # ------------------------------------------------------------------
     #
-    # After this many real-time minutes of tracking, if the flow has
-    # fewer than beacon_min_count samples it is abandoned. Most browsing
-    # is one-shot or low-frequency; abandoning frees memory quickly.
+    # DEPRECATED — no longer referenced by the detection logic. Retained only
+    # so existing redefs (e.g. production.zeek) keep loading.
+    #
+    # This used to abandon any flow with fewer than beacon_min_count samples
+    # after 1 hour of tracking. That silently made every beacon with an
+    # interval of ~13 minutes or longer UNDETECTABLE: it could never collect
+    # 6 samples inside the hour, so it was wiped and restarted forever. Slow
+    # beacons are precisely what long-dwell ransomware backdoors and APT
+    # implants use. Abandonment is now driven by SILENCE rather than by
+    # sample rate — see beacon_max_interval below.
     option track_abandon_after: interval = 1hr;
+
+    # ------------------------------------------------------------------
+    # Tracking admission and silence-based expiry.
+    # ------------------------------------------------------------------
+    #
+    # beacon_max_interval is the longest check-in interval the beacon
+    # detector supports. It drives BOTH ends of the flow lifecycle:
+    #
+    #   * Admission: the FIRST contact from a host to a destination allocates
+    #     no flow state at all — only a small timestamp in candidate_seen.
+    #     Full state is allocated only when the same host/destination/stack
+    #     RECURS within beacon_max_interval. Recurrence is the minimum
+    #     behavioural evidence for periodicity, and the large majority of
+    #     connections (one-off browsing) never recur, so they never cost
+    #     more than a timestamp.
+    #
+    #   * Expiry: a tracked flow is discarded only after it has been SILENT
+    #     for longer than beacon_max_interval (idle expiry, refreshed on every
+    #     connection). An active beacon is therefore never wiped mid-life —
+    #     previously all flow state was hard-expired 6 hours after creation,
+    #     discarding the history of any long-running beacon.
+    #
+    # Beacons slower than this are not tracked. Raising it extends coverage
+    # of very slow implants at the cost of holding candidate/flow state
+    # longer. 4 hours covers the long sleep settings commonly used for
+    # long-dwell access while keeping memory bounded.
+    const beacon_max_interval: interval = 4hr &redef;
+
+    # Two-tier admission (see above). Disable only for testing — with it off,
+    # every first contact allocates a full FlowState, as before.
+    # ------------------------------------------------------------------
+    # Staged behaviour toggles (1.2).
+    # ------------------------------------------------------------------
+    # Changes that REDUCE noise or cost are on by default. Changes that
+    # INCREASE sensitivity are either off (opt-in) or strictly gated:
+    #
+    # candidate_admission_enabled   T  memory: one-off contacts cost a timestamp
+    # eager_popular_eviction        F  CPU: no full-table scan per popularity flip
+    # safe_ip_learning_enabled      T  fewer FPs: allowlist covers SNI-less conns
+    # cluster_share_state           T  fewer FPs: estate-wide popularity
+    # legacy_flow_lifecycle         F  slow beacons (13 min - 4 h) tracked, but
+    #                                  alert only through the strict slow-beacon
+    #                                  gate (slow_beacon_* below)
+    # flowkey_resumption_invariant  F  opt-in: fuller TLS 1.3 flows (more alerts)
+    # cluster_share_host_state      F  opt-in: host-compromise relay (more alerts)
+
+    # T = use the 1.0 abandonment rule (flows with < beacon_min_count samples
+    # abandoned after track_abandon_after). F = silence-based abandonment
+    # (discard only after beacon_max_interval of silence), which is what
+    # makes beacons slower than ~13 minutes detectable.
+    option legacy_flow_lifecycle: bool = F;
+
+    # T = on a popularity flip, scan flow_state and delete that
+    # destination's entries immediately (1.0). F = lazy eviction.
+    option eager_popular_eviction: bool = F;
+
+    # ------------------------------------------------------------------
+    # Corroboration gate — suspicion must be STRONG before alerting.
+    # ------------------------------------------------------------------
+    #
+    # Periodic timing on its own is shared by a great deal of legitimate
+    # software (update and licence checks, telemetry, sync clients). A beacon
+    # alert therefore can be required to carry INDEPENDENT evidence — a signal
+    # about the certificate, the SNI, the TLS stack's rarity, or threat intel
+    # — on top of its timing. Timing-derived tags (jitter tiers, entropy,
+    # skew, peak density) and host-state escalations never count as
+    # corroborators.
+    #
+    # Two tiers:
+    #   * SLOW beacons (median interval >= slow_beacon_min_interval). These
+    #     were undetectable before 1.1 and are dominated by legitimate
+    #     pollers, so they are held to a stricter bar by default.
+    #   * ALL beacons. beacon_min_corroborators defaults to 0 (the 1.0
+    #     behaviour). Raise it to 1 to tighten the whole detector gradually.
+
+    # Median check-in interval at/above which a beacon is treated as SLOW.
+    # 12 minutes: the 1.0 lifecycle could only ever detect beacons faster
+    # than about 13 minutes, so every slow-tier alert is new coverage.
+    option slow_beacon_min_interval: interval = 12min;
+
+    # Slow beacons must reach this confidence (fast beacons: alert_confidence).
+    option slow_beacon_alert_confidence: double = 0.85;
+
+    # Slow beacons must carry at least this many independent corroborators.
+    option slow_beacon_min_corroborators: count = 1;
+
+    # All beacons must carry at least this many independent corroborators.
+    # 0 = 1.0 behaviour. Raise to 1 to require independent evidence everywhere.
+    option beacon_min_corroborators: count = 0;
+
+    # Indicators that count as INDEPENDENT corroboration (any intel_hit:*
+    # indicator also counts). Deliberately excludes timing/shape tags,
+    # informational tags (sparse_client_offering, ech_offered,
+    # deprecated_tls_version) and host-state escalations
+    # (compromised_host_activity, host_c2_escalation), which would let one
+    # detection cascade into others. Operators may add or remove entries.
+    option beacon_corroborating_indicators: set[string] = {
+        "suspect_issuer",
+        "bad_cert_validation",
+        "unrooted_cert_chain",
+        "cert_sni_mismatch",
+        "cert_structurally_poor",
+        "no_sni",
+        "rare_fingerprint_to_raw_ip",
+        "rare_fingerprint_pivot",
+        "rare_server_fingerprint",
+        "rare_server_fingerprint_raw_ip",
+        "ech_offered_nonbrowser",
+        "nonstandard_alpn",
+        "browser_cipher_no_alpn",
+    };
+
+    # Per-host decision trace. Every gate decision for a connection whose
+    # ORIGINATOR is in this set is written to reporter.log (INFO) — why it
+    # was skipped, candidate/promotion, abandonment, and each beacon
+    # evaluation with its confidence. Use one or two test hosts only.
+    #   redef C2_SSL::trace_orig_hosts += { 10.12.7.101 };
+    option trace_orig_hosts: set[addr] = {};
+
+    option candidate_admission_enabled: bool = T;
+
+    # Group connections into flows with a resumption-invariant fingerprint
+    # (see flow_fp in shared.zeek). With this off, a TLS 1.3 beacon mixing
+    # full and resumed handshakes is split across two flows. Rarity, pivot and
+    # intel matching are unaffected either way — they use the full JA3/JA4.
+    option flowkey_resumption_invariant: bool = F;
 
     # early_jitter_sample_floor: minimum samples before the abandonment
     # check runs. A flow is only dropped as "not a beacon" once it has
@@ -1356,8 +1489,163 @@ export {
     # State expiry.
     # ------------------------------------------------------------------
 
+    # DEPRECATED — flow state now uses idle (silence-based) expiry driven by
+    # beacon_max_interval. Retained so existing redefs keep loading.
     const flow_state_expiry: interval = 6hr &redef;
     option ja3_popularity_cap: count = 1000000;
+
+    # ------------------------------------------------------------------
+    # Allowlist propagation to SNI-less connections.
+    # ------------------------------------------------------------------
+    #
+    # Domain allowlist entries match on SNI (or the proxy CONNECT host). A
+    # connection that carries NO SNI is keyed by its raw IP and can never
+    # match a domain entry — so vendor agents that make some connections by
+    # hostname and others straight to the same IP (security agents, update
+    # and telemetry services) leak past an allowlist the operator believes is
+    # in force.
+    #
+    # When a connection is bypassed because its SNI (or CONNECT host) is
+    # allowlisted, the server IP is remembered for safe_ip_learn_expiry.
+    # Later connections to that IP that present NO SNI and NO CONNECT host
+    # inherit the bypass. A connection to the same IP that presents a
+    # DIFFERENT, non-allowlisted SNI is still fully analysed, so a shared
+    # CDN/cloud edge IP cannot be used to smuggle unrelated traffic past the
+    # allowlist. Proxy IPs are never learned.
+    option safe_ip_learning_enabled: bool = T;
+    const safe_ip_learn_expiry: interval = 6hr &redef;
+
+    # ------------------------------------------------------------------
+    # Cluster state sharing.
+    # ------------------------------------------------------------------
+    #
+    # In a Zeek cluster every worker holds its own copy of all state and
+    # sees only a slice of the traffic. Without sharing:
+    #   * the popularity bypass counts distinct clients PER WORKER, so a
+    #     destination used by hundreds of hosts spread over dozens of workers
+    #     may never cross popular_dest_threshold on any one of them — it stays
+    #     tracked (memory) and analysed (false positives);
+    #   * host compromise, payload staging and tracked C2 fingerprints are
+    #     only known to the worker that detected them, so the host's other
+    #     flows (which hash to other workers) never receive that corroboration;
+    #   * a learned safe IP only helps the worker that learned it.
+    #
+    # With sharing enabled, new (destination, client) pairs are counted by a
+    # single aggregator node (a proxy chosen by rendezvous hashing on the
+    # destination, or the manager when no proxies exist) and popularity flips
+    # are broadcast to all workers; host-compromise, payload-staging and
+    # safe-IP verdicts are relayed via the manager to all workers. All of
+    # these are low-volume. No effect in standalone mode.
+    option cluster_share_state: bool = T;
+
+    # Relay host-compromise and payload-staging verdicts to every worker.
+    # OFF by default: it makes one detection escalate the host's flows on all
+    # workers (compromised_host_activity / host_c2_escalation), which raises
+    # alert volume and lets a single false positive spread. Popularity and
+    # safe-IP sharing (which REDUCE noise) are governed by cluster_share_state
+    # alone.
+    option cluster_share_host_state: bool = F;
+
+    # ------------------------------------------------------------------
+    # Certificate context for resumed connections (1.3).
+    # ------------------------------------------------------------------
+    #
+    # A resumed TLS connection carries no certificate. The beacon detector
+    # keeps certificate context per flow, so it is unaffected, but the tunnel
+    # and reverse-flow detectors judge a single connection: a resumed one
+    # previously lost its valid_cert_match suppressor (a false-positive
+    # source) AND its bad-certificate corroborators (a false-negative
+    # source). The verdict from the last full handshake to the same server
+    # IP, port AND SNI is now reused for resumed connections only, so a
+    # resumed connection scores exactly as the handshake it resumes did.
+    # SNI is part of the key so a destination sharing a CDN IP can never
+    # inherit another domain's certificate. Internal only — ssl.log is never
+    # modified. Such alerts carry the cert_context_from_cache indicator.
+    option cert_cache_enabled: bool = T;
+    # How long a full-handshake verdict is reused. TLS session tickets are
+    # commonly valid for up to 24 hours.
+    const cert_cache_expiry: interval = 24hr &redef;
+
+    # ------------------------------------------------------------------
+    # Non-TLS sessions on TLS ports (1.3).
+    # ------------------------------------------------------------------
+    #
+    # Detects a genuine, bidirectional, non-TLS TCP session on a port where
+    # TLS is expected (a custom binary C2 protocol on 443). Heavily gated:
+    #
+    #  1. Hard gate (all required):
+    #     * port in nontls_ports, TCP, outbound;
+    #     * the connection START was observed — history begins with the
+    #       client SYN and contains the server SYN-ACK. A session Zeek joined
+    #       mid-stream (e.g. after a sensor restart) is never evaluated: its
+    #       TLS handshake was simply not seen, so "no TLS" is unknowable.
+    #       This was the cause of the earlier encrypted-tunnel false
+    #       positives;
+    #     * no content gaps (no g/G in history), so a missed ClientHello
+    #       cannot masquerade as non-TLS;
+    #     * data flowed in BOTH directions, at least nontls_min_bytes total;
+    #     * Zeek confirmed NO protocol analyzer (empty service) — not TLS,
+    #       and not plaintext HTTP/SSH either;
+    #     * not excluded: trusted hosts/subnets, proxies, IPs learned from
+    #       allowlisted SNIs or (see nontls_dns_exclusions) from DNS answers
+    #       for allowlisted domains, and destinations that are popular.
+    #  2. Rare destination: at most nontls_max_dest_clients internal hosts.
+    #  3. Evidence. At least nontls_min_evidence of:
+    #       intel     destination matched threat intel
+    #       host      the host is already compromised (TLS C2 detected)
+    #       cadence   regular beacon cadence across repeated sessions
+    #       exfil     upload-dominant transfer of nontls_exfil_min_bytes+
+    #       session   long-lived session (nontls_session_min_duration+)
+    #     AND at least one EXTERNAL corroborator (intel, host, cadence) AND
+    #     at least one STRONG behaviour (intel, cadence, exfil). Shape alone
+    #     (exfil + session) and host + session never alert — legitimate
+    #     proprietary agents (backup, remote support) can look like either.
+    #
+    # Non-TLS alerts never mark a host compromised, so they cannot escalate
+    # the TLS detectors. Domain allowlist entries apply through DNS (there is
+    # no SNI). Known benign non-TLS-on-443 software to plan for: TeamViewer
+    # (falls back to its own protocol on 443), OpenVPN over TCP 443, some
+    # vendor remote-support tools — exclude sanctioned ones by domain in
+    # safe_sni_suffixes, or by IP/subnet in trusted_dest_hosts/subnets.
+    option nontls_enabled: bool = T;
+    # Ports on which TLS is expected. Add e.g. 8443/tcp to extend.
+    option nontls_ports: set[port] = { 443/tcp };
+    # Minimum bytes (both directions combined) for a session to be judged.
+    option nontls_min_bytes: count = 2048;
+    # A destination contacted by more internal hosts than this is not judged.
+    option nontls_max_dest_clients: count = 2;
+    # Minimum number of evidence items (see above).
+    option nontls_min_evidence: count = 2;
+    # "session" evidence: session lasted at least this long.
+    option nontls_session_min_duration: interval = 15min;
+    # "exfil" evidence: upload of at least this many bytes with PCR >= ...
+    option nontls_exfil_min_bytes: count = 1000000;
+    option nontls_exfil_min_pcr: double = 0.80;
+    # "cadence" evidence: at least this many gated sessions, observed for at
+    # least beacon_min_observation_duration, median interval at least
+    # nontls_beacon_min_interval and at most beacon_max_interval, and jitter
+    # within beacon_max_jitter (tight tier only).
+    option nontls_beacon_min_count: count = 12;
+    option nontls_beacon_min_interval: interval = 10sec;
+    # Apply safe_sni_suffixes to non-TLS sessions through DNS: IPs returned
+    # for an allowlisted domain are excluded for nontls_dns_safe_expiry.
+    # Used ONLY by the non-TLS detector (it does not widen the TLS bypass).
+    option nontls_dns_exclusions: bool = T;
+    const nontls_dns_safe_expiry: interval = 6hr &redef;
+
+    # Distinct internal clients, estate-wide, above which a destination is
+    # treated as widely deployed and bypassed on EVERY worker.
+    #
+    # This is deliberately SEPARATE from, and much higher than, the per-worker
+    # popular_dest_threshold. That threshold (3) was tuned against the slice
+    # of traffic a single worker sees; applied estate-wide it would bypass any
+    # destination touched by just 4 hosts — including a C2 beaconing from a
+    # small cluster of infected hosts, which the fan-out ladder
+    # (fanout_penalty_start / fanout_hard_drop) exists to keep visible.
+    # Cluster-wide popularity is for genuinely widely-deployed services only.
+    # The count is a rolling popular_dest_expiry window from first sight, not
+    # a cumulative ratchet.
+    option cluster_popular_dest_threshold: count = 20;
     const ja3_pop_expiry: interval = 24hr &redef;
     const pivot_state_expiry: interval = 7day &redef;
 
