@@ -42,21 +42,9 @@ module C2_SSL;
 #    first-party / vendor infrastructure for YOUR environment.
 # ----------------------------------------------------------------------------
 redef C2_SSL::safe_sni_suffixes += {
-    # --- Sanctioned RMM / patch-management instance (exact host) ---
-    # Our specific Action1 tenant. The RMM package separately covers the
-    # broader .action1.com as an RMM tool; here we bypass C2-SSL analysis
-    # for our own managed instance so it does not page the SOC as a beacon.
-    "server.eu.action1.com",
-
-    # --- Sanctioned attack-simulation / BAS platform ---
-    # NOTE: this deliberately SUPPRESSES C2-like traffic to this domain.
-    # ISRG-simulation is our approved breach-and-attack-simulation target.
-    # Only keep this while the simulation platform is sanctioned; removing
-    # it restores full detection of traffic to that domain.
-    ".isrg-simulation.com",
-
-    # Add your own below, one per line, with a comment explaining why:
-    # ".vendor.example.com",     # <reason it is safe to bypass>
+    "subdomain.examplesafe.com",
+    ".secondleveldomain-example.com",
+    ".thirdleveldomain.another-example.com",
 };
 
 # ----------------------------------------------------------------------------
