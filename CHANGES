@@ -1,3 +1,132 @@
+1.3.0 | 2026-10-19
+
+  * New: non-TLS sessions on TLS ports (nontls.zeek; categories
+    NONTLS_TLS_PORT_SESSION / NONTLS_TLS_PORT_BEACON). Judges only sessions
+    observed from their start (client SYN + server SYN-ACK), with no
+    content gaps, data in both directions and no protocol analyzer
+    confirmed, to rare destinations, on nontls_ports (default 443/tcp).
+    Alerts need >= 2 evidence items including an external corroborator
+    (intel / compromised host / cadence) and a strong behaviour (intel /
+    cadence / exfil). Replaces the removed encrypted-tunnel detector, whose
+    false positives came from sessions joined mid-stream. Exclusions apply
+    as for TLS, plus allowlisted domains via DNS answers
+    (nontls_dns_exclusions). Never marks hosts compromised.
+  * Resumed connections in the tunnel and reverse-flow detectors are now
+    judged on the certificate verdict of the last full handshake to the
+    same server IP, port and SNI (cert_cache_enabled). Previously they lost
+    the valid-cert suppressor and the bad-cert corroborators.
+  * New label-only indicator self_signed_or_forged_cert (self-signed, or a
+    forged issuer detected via a missing/self-referential Authority Key
+    Identifier). Adds no confidence and is not a corroborator.
+  * New btest: nontls-and-certs.
+
+1.2.0 | 2026-09-25
+
+  Rebuilt on 1.0 (66e180f). Changes that reduce noise or cost are on by
+  default; changes that increase sensitivity are opt-in or strictly gated.
+  (The 1.1.x "loss of detection" report was a test-harness issue, not the
+  package; the real issue was increased alert volume.)
+
+  * New corroboration gate. Slow beacons (median interval >= 12 min, newly
+    trackable) alert only at confidence >= 0.85 AND with >= 1 independent
+    corroborator (certificate, SNI, TLS-stack rarity or threat intel —
+    beacon_corroborating_indicators). Timing/shape tags, informational tags
+    and host-state escalations never count. Tagged slow_beacon.
+    beacon_min_corroborators (default 0) extends the requirement to every
+    beacon for gradual tightening.
+  * Host-compromise / payload-staging cluster relay split out into
+    cluster_share_host_state (default OFF — it raises alert volume).
+  * Defaults: candidate_admission_enabled=T, eager_popular_eviction=F,
+    safe_ip_learning_enabled=T, cluster_share_state=T (popularity and
+    safe-IP sharing), legacy_flow_lifecycle=F (slow tracking, gated),
+    flowkey_resumption_invariant=F (opt-in), cluster_share_host_state=F.
+  * Beacon trace lines now show tier, confidence vs required, and
+    corroborator count vs required.
+
+1.1.2 | 2026-09-24
+
+  * SAFE DEFAULTS after a detection regression was reported in 1.1.0/1.1.1:
+    every 1.1 behaviour change is now individually switchable and ALL
+    default to the stable 1.0 behaviour, so the package can be deployed
+    safely and each change validated on its own:
+      candidate_admission_enabled   = F   (1.0: first contact tracked)
+      flowkey_resumption_invariant  = F   (1.0: full-JA4 flow key)
+      legacy_flow_lifecycle         = T   (1.0 abandonment rule) [new]
+      eager_popular_eviction        = T   (1.0 eviction scan)    [new]
+      safe_ip_learning_enabled      = F
+      cluster_share_state           = F
+  * New trace_orig_hosts option: every gate decision for a traced
+    originator (skip reason, admission, abandonment, beacon evaluation and
+    final confidence) is written to reporter.log.
+  * Fixed stale detect.zeek header advertising a non-existent
+    evaluate_sparse slow-beacon detector.
+
+1.1.1 | 2026-09-24
+
+  * Fixed a detection regression introduced in 1.1.0: cluster-wide
+    popularity bypassed destinations far too aggressively.
+    - The aggregator's distinct-client set used &write_expire, so it never
+      reset while new clients kept arriving — a one-way ratchet in which any
+      destination touched by 4 hosts over any number of days became popular
+      and was dropped from analysis. It now uses &create_expire (a rolling
+      24 h window), matching the worker-side dest_client_count.
+    - The estate-wide count reused popular_dest_threshold (3), which was
+      tuned against per-worker traffic slices. It now has its own
+      cluster_popular_dest_threshold (default 20), so a C2 beaconing from a
+      small cluster of infected hosts stays visible. Per-worker popularity is
+      unchanged.
+
+1.1.0 | 2026-09-23
+
+  Detection accuracy
+  * Fixed: beacons with an interval of ~13 minutes or longer could never be
+    detected. Flows with fewer than 6 samples were abandoned after 1 hour and
+    all flow state was hard-expired 6 hours after creation, so slow beacons
+    were wiped before collecting enough samples (the "sparse_state path" the
+    code referred to did not exist). Abandonment is now silence-based: a flow
+    is discarded only after being silent for beacon_max_interval (4 h), and
+    flow state uses idle expiry so an active beacon is never wiped mid-life.
+    Beacons from 13 minutes to 4 hours are now detected; faster beacons are
+    detected at exactly the same point as before.
+  * Fixed: a TLS 1.3 beacon mixing full and resumed handshakes was split into
+    two flows (resumption adds pre_shared_key, changing the JA4 extension
+    count and hash). Flows are now grouped by a resumption-invariant key
+    (flow_fp). Rarity, pivot and intel matching still use the full JA3/JA4.
+
+  Exclusions / false positives
+  * Allowlist propagation to SNI-less connections: when a connection is
+    bypassed on an allowlisted SNI, its server IP is learned; later SNI-less,
+    CONNECT-less connections to that IP inherit the bypass. Different SNIs to
+    the same IP are still analysed; proxy IPs are never learned.
+  * Trailing-dot FQDNs are normalised before allowlist matching.
+  * Added ESET's other vendor-owned apex domains (e5.sk, eset.eu, eset.sk,
+    esetsoftware.com) alongside eset.com / eset.systems.
+
+  Cluster
+  * New cluster state sharing (cluster_share_state, default on). Popularity
+    is counted cluster-wide (new destination/client pairs routed to one
+    aggregator per destination by rendezvous hashing; flips broadcast to all
+    workers). Host-compromise, payload-staging and learned-safe-IP verdicts
+    are relayed to every worker. Uses Cluster::publish on Zeek 7.1+ and
+    Broker::publish on 7.0. Inert in standalone mode.
+  * README documents the load-balancing requirement: the hash must keep a
+    source/destination IP pair on one worker, or beacon samples are split.
+
+  Performance
+  * Two-tier admission: a first contact allocates only a timestamp; full flow
+    state is created only when the host/destination/stack recurs within
+    beacon_max_interval.
+  * Popularity flips no longer scan the whole flow_state table (lazy
+    eviction via idle expiry).
+
+  Deprecated (still accepted so existing redefs load): track_abandon_after,
+  flow_state_expiry.
+
+  Testing
+  * Added exclusions-and-keys btest: trailing-dot and vendor-apex allowlist
+    matching, safe-IP learning, resumption-invariant flow keys, and cluster
+    sharing inert in standalone mode.
+
 1.0.0 | 2026-07-28
 
   Initial public release. Summary of the major capabilities and fixes
