@@ -1,0 +1,15 @@
+history ShAdDawwwTwTfF = T (expect T)
+history ShAfFa = F (expect F, no data)
+history DdAaTt = F (expect F, mid-stream)
+history ShADdgG = F (expect F, gap)
+history ShADaF = F (expect F, one-way)
+intel+exfil+session = 3 (expect 3)
+intel alone = 0 (expect 0)
+exfil+session (shape only) = 0 (expect 0)
+host+session = 0 (expect 0)
+host+exfil = 2 (expect 2)
+cadence+host = 2 (expect 2)
+key_id_hex(OpenSSL 1.1 AKI) = 8A23EB9E6BD7F9375DF96D2139769AA1D45A3E2E
+key_id_hex(OpenSSL 3 AKI) = 8A23EB9E6BD7F9375DF96D2139769AA1D45A3E2E
+key_id_hex(AKI with DirName/serial) = AABBCCDD
+key_id_hex(no hex) = '' (expect empty)
