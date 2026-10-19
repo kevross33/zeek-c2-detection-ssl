@@ -31,6 +31,9 @@ to noisy low-confidence ones.
 ## Example detections
 Some examples of detections for various malware C2 behaviors (it will not detect everything, layer against failure of a single detection technique or solution i.e utilise RITA for additional beaconing detection from Zeek data) and use additional packages for other C2 techniques such as the wireguard package which may be used by tools like SLIVER.
 
+NEW Feature 19/10/26 Detecting possible C2 binary protocols/non-TLS protocols over 443 non-TLS CNCMACHINERMS RAT (https://malware-traffic-analysis.net/2026/09/30/index.html)
+<img width="2162" height="48" alt="image" src="https://github.com/user-attachments/assets/f9cbf0f8-2069-42d6-bb2a-25b4958e6c3f" />
+
 BUMBLEBEE to COBALTSTRIKE (https://malware-traffic-analysis.net/2022/12/07/index.html)
 <img width="1426" height="289" alt="image" src="https://github.com/user-attachments/assets/c4f56881-4c6c-435c-b5a7-301240a722bc" />
 
