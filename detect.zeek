@@ -2,7 +2,7 @@
 #
 # Detectors in this file:
 #   1. evaluate_beacon       — periodic full-handshake beaconing
-#   2. evaluate_sparse       — slow-roll hour-scale beaconing
+#   2. (slow beacons are handled by evaluate_beacon — see legacy_flow_lifecycle)
 #   3. evaluate_tunnel       — long-lived keep-alive / command channel
 #   4. evaluate_reverse_flow — server-driven RAT (idle→command→exfil shape)
 #   5. evaluate_pivot        — rare JA3 fingerprint to abusable CDN/pivot host
@@ -27,6 +27,7 @@
 @load base/protocols/conn
 @load base/protocols/ssl
 
+@load base/utils/strings
 module C2_SSL;
 
 # ====================================================================
@@ -84,10 +85,12 @@ function triage_skip(c: connection): bool
     # flows. This is the single point that scopes every detector to internal
     # clients calling out. See c2_require_outbound / c2_internal_nets.
     if ( c2_require_outbound && ! is_outbound_flow(c) )
-        return T;
+        { trace(c$id$orig_h, fmt("%s skip: not outbound", c$uid)); return T; }
 
-    if ( is_orig_trusted(c$id$orig_h) )   return T;
-    if ( is_dest_trusted(c$id$resp_h) )   return T;
+    if ( is_orig_trusted(c$id$orig_h) )
+        { trace(c$id$orig_h, fmt("%s skip: trusted originator", c$uid)); return T; }
+    if ( is_dest_trusted(c$id$resp_h) )
+        { trace(c$id$orig_h, fmt("%s skip: trusted dest %s", c$uid, c$id$resp_h)); return T; }
     # Skip flows where the originator IS a proxy (proxy→upstream)
     if ( is_proxy_destination(c$id$orig_h) ) return T;
     # An operator allowlist entry is ABSOLUTE. If a destination has been
@@ -108,22 +111,37 @@ function triage_skip(c: connection): bool
     # Reliable SNI-vs-Host-header comparison requires decryption and is a
     # proxy/firewall function; this package detects C2 by BEHAVIOUR, so a
     # fronted channel is caught by its beacon/tunnel shape, not by its cert.
-    if ( c?$ssl && c$ssl?$server_name &&
-         is_sni_fully_safe(c$ssl$server_name) )
+    local has_sni = c?$ssl && c$ssl?$server_name &&
+                    c$ssl$server_name != "" && c$ssl$server_name != "(empty)";
+    if ( has_sni && is_sni_fully_safe(c$ssl$server_name) )
+        {
+        # Remember the server IP so this vendor's SNI-less connections to the
+        # same IP inherit the bypass (never for a proxy IP — that would
+        # bypass everything behind the proxy).
+        if ( ! is_proxy_destination(c$id$resp_h) )
+            note_safe_dest_ip(c$id$resp_h);
+        trace(c$id$orig_h, fmt("%s skip: allowlisted SNI %s", c$uid, c$ssl$server_name));
         return T;
+        }
     # Also honour the plaintext CONNECT host for the safe-SNI bypass. This
     # matters for proxied HTTPS where SNI may be absent (Encrypted Client
     # Hello) but the CONNECT target is a known-safe first-party service.
-    if ( c$uid in connect_host_by_uid &&
-         is_sni_fully_safe(connect_host_by_uid[c$uid]) )
-        return T;
+    local has_chost = c$uid in connect_host_by_uid;
+    if ( has_chost && is_sni_fully_safe(connect_host_by_uid[c$uid]) )
+        { trace(c$id$orig_h, fmt("%s skip: allowlisted CONNECT host", c$uid)); return T; }
+    # A connection with NO SNI and NO CONNECT host is keyed by raw IP and can
+    # never match a domain allowlist entry on its own. If this IP recently
+    # served an allowlisted SNI, inherit the bypass. A connection presenting
+    # a DIFFERENT SNI to the same IP is not affected (shared-CDN safety).
+    if ( ! has_sni && ! has_chost && is_learned_safe_ip(c$id$resp_h) )
+        { trace(c$id$orig_h, fmt("%s skip: SNI-less to learned-safe IP %s", c$uid, c$id$resp_h)); return T; }
 
     # Popularity bypass — destinations contacted by >popular_dest_threshold
     # distinct clients in the network are skipped entirely. This is the
     # primary defence against tracking legitimate niche browsing traffic
     # without needing pre-curated allowlists for every service.
     if ( is_dest_popular(dest_identity(c)) )
-        return T;
+        { trace(c$id$orig_h, fmt("%s skip: popular dest %s", c$uid, dest_identity(c))); return T; }
 
     return F;
     }
@@ -511,6 +529,9 @@ function count_anomalous_payloads(sizes: vector of count): count
 # Evaluate whether the accumulated FlowState looks like a beacon.
 function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
     {
+    trace(k$orig, fmt("beacon eval dest %s: seen=%d windowed=%d server_seen=%s",
+                      k$dest_id, st$total_seen, |st$ts_window|,
+                      st$server_seen ? "T" : "F"));
     if ( st$total_seen < beacon_min_count )
         return;
 
@@ -521,7 +542,7 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
     # Blocked connections often look beacon-shaped (malware retrying on a
     # timer) but represent zero actual C2 communication. Skip them.
     if ( require_bidirectional && ! st$server_seen )
-        return;
+        { trace(k$orig, fmt("beacon %s: stop - server never seen", k$dest_id)); return; }
 
     # ---- RDP suppression for trusted destinations ----
     # If the responder is a known-legitimate RDP destination, skip beacon
@@ -558,7 +579,9 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
                            early_res_ratio >= pinning_min_ratio);
     if ( st$last_seen - st$first_seen < beacon_min_observation_duration &&
          ! strong_pinned )
-        return;
+        { trace(k$orig, fmt("beacon %s: wait - observed %s < %s", k$dest_id,
+                            st$last_seen - st$first_seen,
+                            beacon_min_observation_duration)); return; }
 
     # Cooldown guard.
     if ( st$last_alert != double_to_time(0) &&
@@ -647,13 +670,16 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
         {
         if ( ! ( autocorr_enabled && ac_r1 <= autocorr_strong_negative ) )
             {
+            trace(k$orig, fmt("beacon %s: abandoned - chaotic jitter %.2f",
+                              k$dest_id, jitter));
             delete flow_state[k];
             return;
             }
         }
 
     if ( ! is_pinned && st$total_seen < beacon_alert_min_count )
-        return;
+        { trace(k$orig, fmt("beacon %s: wait - %d/%d samples (jitter %.2f)", k$dest_id,
+                            st$total_seen, beacon_alert_min_count, jitter)); return; }
 
     # Count sleeps and payload anomalies.
     local sleep_count = 0;
@@ -883,6 +909,11 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
                 add indicators["unrooted_cert_chain"];
                 }
             }
+
+        # Self-signed / forged-issuer label (see cert_origin_label). Analyst
+        # context only: adds NO confidence and is not a corroborator.
+        if ( st$cert_origin != "" )
+            add indicators["self_signed_or_forged_cert"];
         }
     else
         {
@@ -1260,8 +1291,34 @@ function evaluate_beacon(k: FlowKey, st: FlowState, resp_p: port)
             }
         }
 
-    if ( conf < alert_confidence )
+    # ---- Corroboration gate: suspicion must be strong before alerting ----
+    # Count INDEPENDENT evidence (certificate, SNI, stack rarity, intel) —
+    # never timing/shape tags or host-state escalations. Slow beacons (the
+    # tier dominated by legitimate pollers) must clear a higher confidence and
+    # carry corroboration; beacon_min_corroborators applies to every beacon.
+    local corro = 0;
+    for ( ind in indicators )
+        if ( ind in beacon_corroborating_indicators || /^intel_hit/ in ind )
+            ++corro;
+    local is_slow = med >= interval_to_double(slow_beacon_min_interval);
+    local need_conf = alert_confidence;
+    local need_corro = beacon_min_corroborators;
+    if ( is_slow )
+        {
+        if ( slow_beacon_alert_confidence > need_conf )
+            need_conf = slow_beacon_alert_confidence;
+        if ( slow_beacon_min_corroborators > need_corro )
+            need_corro = slow_beacon_min_corroborators;
+        }
+    local gate_ok = conf >= need_conf && corro >= need_corro;
+    trace(k$orig, fmt("beacon %s: %s int=%.0fs conf %.2f/%.2f corroborators %d/%d -> %s [%s]",
+                      k$dest_id, is_slow ? "SLOW" : "fast", med, conf, need_conf,
+                      corro, need_corro, gate_ok ? "ALERT" : "below",
+                      join_string_set(indicators, ",")));
+    if ( ! gate_ok )
         return;
+    if ( is_slow )
+        add indicators["slow_beacon"];
 
     if ( st$via_proxy )
         add indicators["via_proxy"];
@@ -1619,8 +1676,16 @@ function evaluate_tunnel(c: connection)
             }
         }
 
-    local sni_match = (c?$ssl && c$ssl?$sni_matches_cert) ? c$ssl$sni_matches_cert : F;
-    local issuer = (c?$ssl && c$ssl?$issuer) ? c$ssl$issuer : "";
+    # Certificate verdict: this connection's own certificate, or — for a
+    # RESUMED connection, which carries none — the verdict of the last full
+    # handshake to the same server IP/port/SNI (cert_cache_enabled). Without
+    # this a resumed connection lost both the valid-cert suppressor (false
+    # positives) and its bad-cert corroborators (false negatives).
+    local cv = cert_verdict_for(c);
+    local sni_match = cv$sni_match;
+    local issuer = cv$issuer;
+    if ( cv$from_cache )
+        add indicators["cert_context_from_cache"];
 
     if ( tun_intercepted )
         {
@@ -1630,8 +1695,7 @@ function evaluate_tunnel(c: connection)
     else
         {
         # ---- Valid cert + matching SNI penalty ----
-        if ( sni_match && c?$ssl && c$ssl?$validation_status &&
-             c$ssl$validation_status == "ok" )
+        if ( sni_match && cv$validation == "ok" )
             {
             conf -= valid_cert_match_penalty;
             add indicators["valid_cert_match"];
@@ -1641,14 +1705,15 @@ function evaluate_tunnel(c: connection)
         if ( has_suspect_issuer(issuer) )
             { conf += 0.25; add indicators["suspect_issuer"]; }
 
-        if ( c?$ssl && c$ssl?$validation_status &&
-             ("self signed" in c$ssl$validation_status ||
-              "expired"     in c$ssl$validation_status) )
+        if ( "self signed" in cv$validation || "expired" in cv$validation )
             { conf += 0.15; add indicators["bad_cert_validation"]; }
 
-        if ( ! sni_match && sni != "(empty)" && sni != "" &&
-             c?$ssl && c$ssl?$issuer && c$ssl$issuer != "" )
+        if ( ! sni_match && sni != "(empty)" && sni != "" && issuer != "" )
             { conf += cert_sni_mismatch_bonus; add indicators["cert_sni_mismatch"]; }
+
+        # Self-signed / forged-issuer label — analyst context, never scored.
+        if ( cv$origin != "" )
+            add indicators["self_signed_or_forged_cert"];
         }
 
     # no_sni applies regardless of interception (SNI is the client's).
@@ -1946,7 +2011,12 @@ function evaluate_reverse_flow(c: connection)
     if ( via_proxy )
         add indicators["via_proxy"];
 
-    local issuer = (c?$ssl && c$ssl?$issuer) ? c$ssl$issuer : "";
+    # Certificate verdict — live, or cached for a resumed connection (see
+    # evaluate_tunnel / cert_cache_enabled).
+    local cv = cert_verdict_for(c);
+    local issuer = cv$issuer;
+    if ( cv$from_cache )
+        add indicators["cert_context_from_cache"];
 
     # Base confidence is LOW — PCR + silence alone match too many
     # legitimate upload patterns (healthcare SaaS, log agents, form apps).
@@ -1968,9 +2038,8 @@ function evaluate_reverse_flow(c: connection)
         }
 
     # ---- Valid cert + matching SNI penalty ----
-    local sni_match = (c?$ssl && c$ssl?$sni_matches_cert) ? c$ssl$sni_matches_cert : F;
-    if ( sni_match && c?$ssl && c$ssl?$validation_status &&
-         c$ssl$validation_status == "ok" )
+    local sni_match = cv$sni_match;
+    if ( sni_match && cv$validation == "ok" )
         {
         conf -= valid_cert_match_penalty;
         add indicators["valid_cert_match"];
@@ -2004,14 +2073,15 @@ function evaluate_reverse_flow(c: connection)
     if ( sni == "(empty)" || sni == "" )
         { conf += 0.10; add indicators["no_sni"]; }
 
-    if ( c?$ssl && c$ssl?$validation_status &&
-         ("self signed" in c$ssl$validation_status ||
-          "expired"     in c$ssl$validation_status) )
+    if ( "self signed" in cv$validation || "expired" in cv$validation )
         { conf += 0.15; add indicators["bad_cert_validation"]; }
 
-    if ( ! sni_match && sni != "(empty)" && sni != "" &&
-         c?$ssl && c$ssl?$issuer && c$ssl$issuer != "" )
+    if ( ! sni_match && sni != "(empty)" && sni != "" && issuer != "" )
         { conf += cert_sni_mismatch_bonus; add indicators["cert_sni_mismatch"]; }
+
+    # Self-signed / forged-issuer label — analyst context, never scored.
+    if ( cv$origin != "" )
+        add indicators["self_signed_or_forged_cert"];
 
     # ---- Cross-detector beacon-history bonus ----
     # If the beacon detector has already been tracking connections from
@@ -2019,7 +2089,7 @@ function evaluate_reverse_flow(c: connection)
     # substantially more credible — it means repeated contact, not a
     # single upload event. Check flow_state for any entry with this
     # (orig_h, dest_id) pair regardless of JA3.
-    local ja3_val = primary_fp(
+    local ja3_val = flow_fp(
         (c?$ssl && c$ssl?$ja3) ? c$ssl$ja3 : "",
         (c?$ssl && c$ssl?$ja4) ? c$ssl$ja4 : "");
     local fk: FlowKey = [$orig = c$id$orig_h, $dest_id = dest_id,
@@ -2097,7 +2167,8 @@ function evaluate_pivot(c: connection)
     local pfp = primary_fp(c$ssl$ja3, c$ssl?$ja4 ? c$ssl$ja4 : "");
     local k: FlowKey = [$orig    = c$id$orig_h,
                         $dest_id = dest_identity_for(sni, c$id$resp_h, via_proxy),
-                        $ja3     = pfp];
+                        $ja3     = flow_fp(c$ssl$ja3,
+                                           c$ssl?$ja4 ? c$ssl$ja4 : "")];
     if ( k !in flow_state ) return;
     local st = flow_state[k];
     if ( st$total_seen < pivot_min_conns ) return;
@@ -2165,14 +2236,15 @@ function update_flow_state(c: connection): FlowKey
     local chost = (c$uid in connect_host_by_uid) ?
                   connect_host_by_uid[c$uid] : "";
     local dest_id   = dest_identity_full(sni, chost, c$id$resp_h, via_proxy);
-    # The FlowKey's fingerprint slot uses the PRIMARY fingerprint (JA4 when
-    # present, else JA3) so a beacon groups stably across GREASE/order
-    # variation. The individual ja3/ja4 are still stored separately on the
-    # FlowState for reporting. (Field is named $ja3 for historical reasons;
-    # it now carries the primary fp.)
+    # The FlowKey's fingerprint slot uses flow_fp(): the JA4 with the
+    # extension count/hash removed, so a beacon groups stably across GREASE,
+    # order variation AND TLS 1.3 session resumption (which adds an
+    # extension). The individual ja3/ja4 are still stored separately on the
+    # FlowState for rarity, intel and reporting. (Field is named $ja3 for
+    # historical reasons.)
     local cur_ja3 = (c?$ssl && c$ssl?$ja3) ? c$ssl$ja3 : "";
     local cur_ja4 = (c?$ssl && c$ssl?$ja4) ? c$ssl$ja4 : "";
-    local ja3 = primary_fp(cur_ja3, cur_ja4);
+    local ja3 = flow_fp(cur_ja3, cur_ja4);
 
     local k: FlowKey = [$orig = c$id$orig_h, $dest_id = dest_id, $ja3 = ja3];
 
@@ -2183,32 +2255,80 @@ function update_flow_state(c: connection): FlowKey
     # *new* flows; this call ensures the counter keeps advancing.
     note_dest_client(dest_id, c$id$orig_h);
 
-    # If the destination became popular as a result of this update,
-    # evict_state_for_dest has already deleted any prior state. Drop
-    # this update entirely — there is nothing left to track for this
-    # destination.
+    # If the destination is (or just became) popular, drop this flow's own
+    # state and stop. Other hosts' entries for the destination are evicted
+    # lazily: they are never touched again (every entry point triage-skips a
+    # popular destination) and age out via flow_state's idle expiry. Deleting
+    # this key matters: the caller would otherwise go on to evaluate it.
     if ( is_dest_popular(dest_id) )
-        return k;
-
-    # Active abandonment of stale low-frequency flows.
-    # If this flow has been tracked for longer than track_abandon_after
-    # but never accumulated enough samples to look like a beacon, it's
-    # legitimate browsing. Wipe it and start fresh — if it really IS a
-    # very-slow beacon, the sparse_state path will catch it separately.
-    if ( k in flow_state )
         {
-        local existing = flow_state[k];
-        if ( existing$total_seen < beacon_min_count &&
-             c$start_time - existing$first_seen > track_abandon_after )
+        if ( k in flow_state )
+            delete flow_state[k];
+        trace(c$id$orig_h, fmt("dest %s popular - not tracked", dest_id));
+        return k;
+        }
+
+    # Silence-based abandonment. A tracked flow that has been silent for
+    # longer than beacon_max_interval is not a beacon we support — restart it.
+    # (flow_state's idle expiry normally removes it first; this is the
+    # deterministic guard.) This REPLACES the old rule that abandoned any
+    # flow with < beacon_min_count samples after 1 hour, which made every
+    # beacon slower than ~13 minutes undetectable.
+    if ( legacy_flow_lifecycle )
+        {
+        # 1.0 rule: a flow tracked longer than track_abandon_after with fewer
+        # than beacon_min_count samples is abandoned. (Blind to beacons
+        # slower than ~13 minutes — see legacy_flow_lifecycle.)
+        if ( k in flow_state &&
+             flow_state[k]$total_seen < beacon_min_count &&
+             c$start_time - flow_state[k]$first_seen > track_abandon_after )
             {
+            trace(c$id$orig_h, fmt("dest %s abandoned (legacy: <%d samples after %s)",
+                                   dest_id, beacon_min_count, track_abandon_after));
             delete flow_state[k];
             }
+        }
+    else if ( k in flow_state &&
+              c$start_time - flow_state[k]$last_seen > beacon_max_interval )
+        {
+        trace(c$id$orig_h, fmt("dest %s abandoned (silent > %s)",
+                               dest_id, beacon_max_interval));
+        delete flow_state[k];
         }
 
     if ( k !in flow_state )
         {
         local fresh: FlowState;
-        fresh$first_seen = c$start_time;
+
+        if ( candidate_admission_enabled )
+            {
+            # Two-tier admission. A FIRST contact allocates only a timestamp;
+            # full state is created only when the same host/destination/stack
+            # RECURS within beacon_max_interval. One-off connections — most
+            # traffic — never cost more than this. Nothing is lost: the first
+            # contact is counted (total_seen = 1) and its time becomes
+            # first_seen, and the grace period below never windowed early
+            # contacts anyway.
+            local ckey = fmt("%s|%s|%s", k$orig, k$dest_id, k$ja3);
+            if ( ckey !in candidate_seen )
+                {
+                candidate_seen[ckey] = c$start_time;
+                trace(c$id$orig_h, fmt("dest %s fp %s first contact - candidate",
+                                       dest_id, k$ja3));
+                return k;
+                }
+            fresh$first_seen = candidate_seen[ckey];
+            fresh$total_seen = 1;
+            delete candidate_seen[ckey];
+            trace(c$id$orig_h, fmt("dest %s fp %s recurred - promoted to tracked",
+                                   dest_id, k$ja3));
+            }
+        else
+            {
+            fresh$first_seen = c$start_time;
+            trace(c$id$orig_h, fmt("dest %s fp %s new flow tracked", dest_id, k$ja3));
+            }
+
         flow_state[k] = fresh;
         }
 
@@ -2285,6 +2405,9 @@ function update_flow_state(c: connection): FlowKey
                 st$cert_issuer = c$ssl$issuer;
             if ( c$ssl?$subject && c$ssl$subject != "-" )
                 st$cert_subject = c$ssl$subject;
+            local co = cert_origin_label(c);
+            if ( co != "" )
+                st$cert_origin = co;
             }
 
         if ( c$ssl?$ja3 ) st$ja3  = c$ssl$ja3;
@@ -2478,8 +2601,18 @@ event ssl_established(c: connection) &priority = -5
     if ( is_dest_trusted(c$id$resp_h) )       return;
     if ( is_proxy_destination(c$id$orig_h) )  return;
     # Operator allowlist entries are ABSOLUTE — see the note in triage_skip.
-    if ( c?$ssl && c$ssl?$server_name &&
-         is_sni_fully_safe(c$ssl$server_name) )
+    local est_has_sni = c?$ssl && c$ssl?$server_name &&
+                        c$ssl$server_name != "" &&
+                        c$ssl$server_name != "(empty)";
+    if ( est_has_sni && is_sni_fully_safe(c$ssl$server_name) )
+        {
+        if ( ! is_proxy_destination(c$id$resp_h) )
+            note_safe_dest_ip(c$id$resp_h);
+        return;
+        }
+    # SNI-less connection to an IP that recently served an allowlisted SNI.
+    if ( ! est_has_sni && c$uid !in connect_host_by_uid &&
+         is_learned_safe_ip(c$id$resp_h) )
         return;
 
     # Track per-destination client population (the 5-host rule).
@@ -2510,6 +2643,11 @@ event ssl_established(c: connection) &priority = -5
 
     note_pivot(c);
 
+    # Remember this full handshake's certificate verdict so a later RESUMED
+    # connection to the same server IP/port/SNI is judged on it (see
+    # cert_cache_enabled). No-op for resumed connections.
+    note_cert_verdict(c);
+
     # ssl_established fires when the handshake completes — the server has
     # sent its ServerHello, so ja3s MUST be available. Mark the flow as
     # bidirectional. We also do this in update_flow_state, but doing it
@@ -2519,8 +2657,8 @@ event ssl_established(c: connection) &priority = -5
     local sni = c$ssl?$server_name ? c$ssl$server_name : "";
     local via_proxy = is_proxy_destination(c$id$resp_h);
     local dest_id = dest_identity_for(sni, c$id$resp_h, via_proxy);
-    local ja3 = primary_fp(c$ssl?$ja3 ? c$ssl$ja3 : "",
-                           c$ssl?$ja4 ? c$ssl$ja4 : "");
+    local ja3 = flow_fp(c$ssl?$ja3 ? c$ssl$ja3 : "",
+                        c$ssl?$ja4 ? c$ssl$ja4 : "");
     local fk: FlowKey = [$orig = c$id$orig_h, $dest_id = dest_id, $ja3 = ja3];
     if ( fk in flow_state )
         {
@@ -2602,12 +2740,15 @@ event connection_state_remove(c: connection) &priority = -5
     {
     if ( triage_skip(c) )           return;
 
-    if ( ! c?$ssl )                 return;
-    if ( below_track_floor(c) )     return;
+    if ( ! c?$ssl )
+        { trace(c$id$orig_h, fmt("%s skip: no SSL record", c$uid)); return; }
+    if ( below_track_floor(c) )
+        { trace(c$id$orig_h, fmt("%s skip: below track floor", c$uid)); return; }
 
     # Long flows → tunnel evaluator (different analysis path).
     if ( c?$duration && c$duration >= long_conn_duration )
         {
+        trace(c$id$orig_h, fmt("%s long flow -> tunnel evaluator", c$uid));
         evaluate_tunnel(c);
         return;
         }
@@ -2618,14 +2759,13 @@ event connection_state_remove(c: connection) &priority = -5
     # Update per-flow beacon state.
     local k  = update_flow_state(c);
 
-    # update_flow_state early-returns WITHOUT creating state when this update
-    # tipped the destination over popular_dest_threshold: note_dest_client()
-    # calls evict_state_for_dest(), which deletes every flow_state entry for
-    # that destination, and update_flow_state then returns k with nothing
-    # tracked. Indexing flow_state[k] here unguarded raises a Zeek reporter
-    # error once per destination per popularity flip. The destination is now
-    # popular (a shared service, not single-host C2), so there is nothing left
-    # to evaluate — bail out.
+    # update_flow_state returns k WITHOUT tracked state in two cases:
+    #   * this is a FIRST contact (two-tier admission records only a
+    #     timestamp until the host/destination recurs), or
+    #   * the destination is (or just became) popular, in which case this
+    #     key's state was deleted.
+    # Indexing flow_state[k] unguarded would raise a reporter error; there is
+    # nothing to evaluate yet — bail out.
     if ( k !in flow_state )
         return;
 
@@ -2650,6 +2790,10 @@ event zeek_done()
     {
     for ( k, st in flow_state )
         {
+        # Popular destinations are evicted lazily, so their entries can
+        # still be present here — never evaluate them.
+        if ( is_dest_popular(k$dest_id) )
+            next;
         if ( st$total_seen >= beacon_alert_min_count &&
              st$last_alert == double_to_time(0) )
             evaluate_beacon(k, st, 443/tcp);
