@@ -19,6 +19,8 @@ It will also attempt to detect other activities over the C2 channel including po
 
 Another note is it does support definition of web proxies. The correct positioning of a sensor for this between the client and the web proxy so we can see the true client as well as potential fingerprinting. This however is only partially tested at the moment and only client to Internet has been fully tested in network. It exists to provide that detection on what can still be detected on but also to deal with potential false positive skews proxies may introduce if not defined correctly.
 
+NEW 19/10/2026: The package will attempt to identify potential suspicious non-TLS C2 traffic over TLS ports (443 currently but you can change this). A wider non-protocol over protocol and generic C2 package was considered but I think for the known protocols (other protocol over TLS/HTTP etc.) merging it within existing work on the protocol verification is best. As this is new it could cause false positives and may require local exclusions to be applied (which would need to be by IP currently as SNI would be missing).
+
 ## Package scope
 Behavioural detection of command-and-control over SSL/TLS for Zeek 7 and 8 —
 and of non-TLS sessions on ports where TLS is expected (by default 443).
